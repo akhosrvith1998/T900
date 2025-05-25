@@ -40,38 +40,18 @@ BOT_USERNAME = "@Bgnabot"
 TOKEN = os.getenv("BOT_TOKEN", "7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc")
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 
-def get_user_first_name(user_id):
-    """دریافت نام کاربر از API تلگرام"""
-    url = URL + "getChat"
-    params = {"chat_id": user_id}
-    try:
-        resp = requests.get(url, params=params).json()
-        if resp.get("ok"):
-            return resp["result"].get("first_name", "Unknown")
-        return "Unknown"
-    except Exception as e:
-        logger.error("Error fetching first name for user_id %s: %s", user_id, str(e))
-        return "Unknown"
-
-def resolve_user_id(receiver_id, receiver_username=None):
-    """تبدیل یوزرنیم به آیدی عددی با مدیریت خطاهای پیشرفته"""
+def resolve_user_id(receiver_id):
+    """تبدیل یوزرنیم/آیدی به آیدی عددی"""
     if receiver_id.startswith('@'):
-        receiver_username = receiver_id.lstrip('@')
-        receiver_id = None
-    
-    if receiver_username:
-        url = URL + "getChat"
-        params = {"chat_id": f"@{receiver_username}"}
+        username = receiver_id.lstrip('@')
         try:
-            resp = requests.get(url, params=params, timeout=10).json()
-            if resp.get("ok"):
-                return str(resp["result"]["id"])
-            logger.warning("خطا در دریافت آدی کاربر: %s", resp.get("description"))
+            resp = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}).json()
+            return str(resp['result']['id']) if resp.get('ok') else None
+        except:
             return None
-        except Exception as e:
-            logger.error("خطای شدید در دریافت آدی: %s", str(e))
-            return None
-    return receiver_id if receiver_id.isdigit() else None
+    elif receiver_id.isdigit():
+        return receiver_id
+    return None
 
 def process_update(update):
     """پردازش آپدیت‌های دریافتی از تلگرام"""
@@ -79,125 +59,101 @@ def process_update(update):
 
     if "inline_query" in update:
         inline_query = update["inline_query"]
-        query_text = inline_query.get("query", "").replace(BOT_USERNAME, "").strip()
+        query = inline_query.get("query", "").replace(BOT_USERNAME, "").strip()
+        
+        # پردازش کوئری‌های معتبر
+        if query:
+            parts = query.split(maxsplit=1)
+            if len(parts) == 2:
+                target, secret_message = parts
+                receiver_id = resolve_user_id(target)
+                
+                if not receiver_id:
+                    answer_inline_query(inline_query["id"], [{
+                        "type": "article",
+                        "id": "error",
+                        "title": "❌ کاربر یافت نشد!",
+                        "input_message_content": {"message_text": "خطا: شناسه کاربر نامعتبر است!"}
+                    }])
+                    return
+                
+                # دریافت اطلاعات کاربر
+                try:
+                    user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}).json()['result']
+                    first_name = user_info.get('first_name', 'ناشناس')
+                    username = user_info.get('username', '')
+                except:
+                    first_name = "ناشناس"
+                    username = ""
 
-        # پردازش کوئری‌های شامل یوزرنیم
-        if query_text and ('@' in query_text.split()[0] or query_text.split()[0].isdigit()):
-            parts = query_text.split(maxsplit=1)
-            if len(parts) < 2:
-                return
-            
-            target = parts[0]
-            secret_message = parts[1]
-            
-            # حل مشکل یوزرنیم‌ها
-            actual_receiver_id = resolve_user_id(target)
-            if not actual_receiver_id:
+                # ساخت محتوای پیام
+                message_link = f"[{escape_markdown(first_name)}](tg://user?id={receiver_id})"
+                code_content = f"{first_name} 0 | ۰۰:۰۰\n__________\nبدون بازدید"
+                public_text = f"{message_link}\n```\n{code_content}\n```"
+
+                # ساخت دکمه‌های تعاملی
+                markup = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "👁️ نمایش", "callback_data": f"show_{uuid.uuid4().hex}"},
+                            {"text": "🗨️ پاسخ", "switch_inline_query_current_chat": f"{inline_query['from']['id']}"}
+                        ]
+                    ]
+                }
+
+                # دریافت و ذخیره عکس پروفایل
+                _, photo_url = get_user_profile_photo(int(receiver_id))
+                history_entry = {
+                    "receiver_id": receiver_id,
+                    "name": first_name,
+                    "photo": photo_url,
+                    "time": time.time()
+                }
+                save_history(inline_query['from']['id'], history_entry)
+
+                # ارسال نتیجه
                 answer_inline_query(inline_query["id"], [{
                     "type": "article",
-                    "id": "error",
-                    "title": "❌ کاربر یافت نشد!",
-                    "input_message_content": {"message_text": "خطا: کاربر مورد نظر وجود ندارد!"}
+                    "id": receiver_id,
+                    "title": f"🔐 ارسال نجوا به {first_name}",
+                    "description": f"پیام: {secret_message[:20]}...",
+                    "thumb_url": photo_url,
+                    "input_message_content": {
+                        "message_text": public_text,
+                        "parse_mode": "MarkdownV2"
+                    },
+                    "reply_markup": markup
                 }])
                 return
-            
-            # دریافت اطلاعات کاربر با جزییات کامل
-            try:
-                chat_info = requests.get(URL + "getChat", params={"chat_id": actual_receiver_id}).json()
-                receiver_first_name = chat_info.get("result", {}).get("first_name", "ناشناس")
-                receiver_username = chat_info.get("result", {}).get("username", "")
-            except:
-                receiver_first_name = "ناشناس"
-                receiver_username = ""
 
-            # ساخت لینک صحیح با نام واقعی
-            receiver_link = f"[{escape_markdown(receiver_first_name)}](tg://user?id={actual_receiver_id})"
-            
-            # تولید محتوای پیام
-            code_content = f"{receiver_first_name} 0 | هنوز باز نشده\n___________\nNothing"
-            public_text = f"{receiver_link}\n```\n{code_content}\n```"
-
-            # ساخت کیبورد تعاملی
-            keyboard = {
-                "inline_keyboard": [
-                    [
-                        {"text": "👁️ مشاهده", "callback_data": f"show_{uuid.uuid4().hex}"},
-                        {"text": "🗨️ پاسخ", "switch_inline_query_current_chat": f"@{inline_query['from']['username']}" if inline_query['from'].get('username') else ""}
-                    ]
-                ]
-            }
-
-            # ثبت در تاریخچه با عکس پروفایل
-            profile_photo, photo_url = get_user_profile_photo(int(actual_receiver_id))
-            history_entry = {
-                "receiver_id": actual_receiver_id,
-                "display_name": receiver_first_name,
-                "profile_photo_url": photo_url,
-                "last_used": time.time()
-            }
-            save_history(inline_query['from']['id'], history_entry)
-
-            # ارسال نتیجه با تامبنیل
-            answer_inline_query(inline_query["id"], [{
-                "type": "article",
-                "id": actual_receiver_id,
-                "title": f"🔐 نجوا به {receiver_first_name}",
-                "description": f"ارسال پیام محرمانه به {receiver_first_name}",
-                "thumb_url": photo_url,
-                "input_message_content": {
-                    "message_text": public_text,
-                    "parse_mode": "MarkdownV2"
-                },
-                "reply_markup": keyboard
-            }])
-
-        else:
-            # نمایش تاریخچه در صورت عدم وجود کوئری یا ورودی ناقص
-            sender_id = str(inline_query["from"]["id"])
-            results = [
-                {
+        # نمایش تاریخچه
+        sender_id = str(inline_query['from']['id'])
+        results = [{
+            "type": "article",
+            "id": "help",
+            "title": "💡 راهنمای استفاده",
+            "input_message_content": {
+                "message_text": "برای ارسال نجوا:\n@Bgnabot [آدی/یوزرنیم] [متن پیام]"
+            },
+            "thumb_url": "https://via.placeholder.com/150"
+        }]
+        
+        if sender_id in history:
+            for item in history[sender_id]:
+                # دریافت عکس به روز شده
+                _, photo = get_user_profile_photo(int(item['receiver_id']))
+                results.append({
                     "type": "article",
-                    "id": "base",
-                    "title": "💡 راهنمای نجوا",
+                    "id": f"hist_{item['receiver_id']}",
+                    "title": f"✉️ تاریخچه نجوا به {item['name']}",
+                    "description": f"آخرین ارسال: {get_irst_time(item['time'])}",
+                    "thumb_url": photo,
                     "input_message_content": {
-                        "message_text": (
-                            "راهنمای نجوا:\n\n"
-                            "روش اول با یوزرنیم گیرنده:\n"
-                            "@Bgnabot @username متن نجوا\n\n"
-                            "روش دوم با آیدی عددی گیرنده:\n"
-                            "@Bgnabot 1234567890 متن نجوا\n\n"
-                            "یا فقط متن نجوا را وارد کنید و از تاریخچه گیرنده انتخاب کنید!"
-                        )
-                    },
-                    "description": "همیشه فعال!",
-                    "thumb_url": "https://via.placeholder.com/150"
-                }
-            ]
-
-            if sender_id in history:
-                for receiver in sorted(history[sender_id], key=lambda x: x.get("display_name", "")):
-                    receiver_id = receiver.get("receiver_id", "")
-                    if not receiver_id:
-                        continue
-                    receiver_user_id = receiver_id.split('@')[-1] if '@' in receiver_id else receiver_id
-                    profile_photo, profile_photo_url = get_user_profile_photo(int(receiver_user_id))
-                    if profile_photo_url and profile_photo_url != receiver.get("profile_photo_url"):
-                        receiver["profile_photo_url"] = profile_photo_url
-                        save_history(sender_id, receiver)
-                    result = {
-                        "type": "article",
-                        "id": f"history_{receiver_id}",
-                        "title": f"نجوا به {receiver.get('display_name', 'Unknown')} ✨",
-                        "input_message_content": {
-                            "message_text": f"📩 پیام خود را برای {receiver.get('display_name', 'Unknown')} وارد کنید"
-                        },
-                        "description": f"ارسال نجوا به {receiver.get('first_name', 'Unknown')}",
-                        "thumb_url": receiver.get("profile_photo_url", "https://via.placeholder.com/150")
+                        "message_text": f"ارسال مجدد پیام به {item['name']}"
                     }
-                    results.append(result)
-
-            set_cached_inline_query(sender_id, query_text, results)
-            answer_inline_query(inline_query["id"], results)
+                })
+        
+        answer_inline_query(inline_query["id"], results)
 
     elif "callback_query" in update:
         callback = update["callback_query"]
