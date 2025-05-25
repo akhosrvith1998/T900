@@ -13,14 +13,19 @@ def get_user_profile_photo(user_id):
     """دریافت عکس پروفایل کاربر با کش"""
     url = URL + "getUserProfilePhotos"
     params = {"user_id": user_id, "limit": 1}
-    resp = requests.get(url, params=params).json()
-    if resp.get("ok") and resp["result"]["total_count"] > 0:
-        photo = resp["result"]["photos"][0][0]["file_id"]
-        return photo
-    return None
+    try:
+        resp = requests.get(url, params=params).json()
+        if resp.get("ok") and resp["result"]["total_count"] > 0:
+            return resp["result"]["photos"][0][0]["file_id"]
+        return None
+    except Exception as e:
+        print(f"Error fetching profile photo: {e}")
+        return None
 
 def escape_markdown(text):
     """فرمت کردن متن برای MarkdownV2"""
+    if not text:
+        return ""
     escape_chars = '_*[]()~>#+-=|{}.!'
     return ''.join(['\\' + char if char in escape_chars else char for char in str(text)])
 
@@ -70,7 +75,7 @@ def edit_message_text(chat_id=None, message_id=None, inline_message_id=None, tex
 
 def format_block_code(whisper_data):
     """فرمت کردن اطلاعات نجوا برای نمایش در بلاک کد"""
-    receiver_first_name = whisper_data.get('first_name', 'Unknown')  # فقط نام گیرنده
+    receiver_first_name = whisper_data.get('first_name', 'Unknown')  # فقط نام نمایشی
     view_times = whisper_data.get("receiver_views", [])
     view_count = len(view_times)
     view_time_str = get_irst_time(view_times[-1]) if view_times else "Don't see."
