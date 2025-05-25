@@ -10,7 +10,7 @@ IRST_OFFSET = timedelta(hours=3, minutes=30)
 
 @lru_cache(maxsize=500)
 def get_user_profile_photo(user_id):
-    """دریافت عکس پروفایل با کیفیت بالا"""
+    """Get high-quality profile photo"""
     try:
         resp = requests.get(f"{URL}getUserProfilePhotos", params={
             "user_id": user_id,
@@ -30,7 +30,7 @@ def get_user_profile_photo(user_id):
         return None, "https://via.placeholder.com/150"
 
 def escape_markdown(text):
-    """فرمت کردن متن برای MarkdownV2 با مدیریت کاراکترهای خاص"""
+    """Format text for MarkdownV2, escaping special characters"""
     if not text or not text.strip():
         return "Unknown"
     escape_chars = '_*[]()~`>#+-=|{}.!'
@@ -38,13 +38,13 @@ def escape_markdown(text):
     return escaped_text if escaped_text.strip() else "Unknown"
 
 def get_irst_time(timestamp):
-    """تبدیل زمان به وقت ایران"""
+    """Convert timestamp to Iran time"""
     utc_time = datetime.fromtimestamp(timestamp, tz=timezone.utc)
     irst_time = utc_time + IRST_OFFSET
     return irst_time.strftime("%H:%M")
 
 def answer_inline_query(inline_query_id, results):
-    """پاسخ به inline query"""
+    """Answer inline query"""
     url = URL + "answerInlineQuery"
     data = {
         "inline_query_id": inline_query_id,
@@ -55,7 +55,7 @@ def answer_inline_query(inline_query_id, results):
     requests.post(url, data=data)
 
 def answer_callback_query(callback_query_id, text, show_alert=False):
-    """پاسخ به callback query"""
+    """Answer callback query"""
     url = URL + "answerCallbackQuery"
     data = {
         "callback_query_id": callback_query_id,
@@ -65,7 +65,7 @@ def answer_callback_query(callback_query_id, text, show_alert=False):
     requests.post(url, data=data)
 
 def edit_message_text(chat_id=None, message_id=None, inline_message_id=None, text=None, reply_markup=None):
-    """ویرایش پیام"""
+    """Edit message text"""
     url = URL + "editMessageText"
     data = {
         "text": text,
@@ -82,15 +82,15 @@ def edit_message_text(chat_id=None, message_id=None, inline_message_id=None, tex
     return requests.post(url, data=data)
 
 def format_block_code(whisper_data):
-    """فرمت کردن اطلاعات نجوا برای نمایش در بلاک کد"""
+    """Format whisper data for display in code block"""
     receiver_first_name = whisper_data.get('first_name', 'Unknown')
     view_times = whisper_data.get("receiver_views", [])
     view_count = len(view_times)
-    view_time_str = get_irst_time(view_times[-1]) if view_times else "Don't see."
-    code_content = f"{escape_markdown(receiver_first_name)} {view_count} | {view_time_str}\n___________"
+    view_time_str = get_irst_time(view_times[-1]) if view_times else "Not yet"
+    code_content = f"{escape_markdown(receiver_first_name)} {view_count} | {view_time_str}\n__________"
     curious_users = whisper_data.get("curious_users", [])
     if curious_users:
-        code_content += "\nCurious\n" + "\n".join([escape_markdown(user.get("name", "Unknown")) for user in sorted(curious_users, key=lambda x: x.get("name", ""))])
+        code_content += "\nCuriosity\n" + "\n".join([escape_markdown(user.get("name", "Unknown")) for user in sorted(curious_users, key=lambda x: x.get("name", ""))])
     else:
         code_content += "\nNothing"
     return code_content
