@@ -61,13 +61,17 @@ def resolve_user_id(receiver_id, receiver_username=None):
         url = URL + "getChat"
         params = {"chat_id": f"@{receiver_username}"}
         try:
-            resp = requests.get(url, params=params).json()
+            resp = requests.get(url, params=params, timeout=10).json()
             if resp.get("ok"):
                 user_id = str(resp["result"]["id"])
                 print(f"Resolved user_id for @{receiver_username}: {user_id}")
                 return user_id
+            else:
+                logger.warning("User not found for username @%s: %s", receiver_username, resp.get("description", "Unknown error"))
+                return None  # اگه یوزرنیم پیدا نشد، None برگردون
         except Exception as e:
             logger.error("Error resolving user_id for username @%s: %s", receiver_username, str(e))
+            return None
     logger.error("Could not resolve user_id for receiver_id %s", receiver_id)
     return None
 
@@ -205,89 +209,92 @@ def process_update(update):
                 elif receiver_id.isdigit():
                     receiver_user_id = receiver_id
                 else:
-                    raise ValueError("شناسه گیرنده نامعتبر")
+                    logger.error("Invalid receiver_id format: %s", receiver_id)
+                    set_cached_inline_query(sender_id, query_text, [base_result])
+                    answer_inline_query(query_id, [base_result])
+                    return
 
-                if receiver_username or receiver_user_id:
-                    actual_receiver_id = resolve_user_id(receiver_id, receiver_username)
-                    if not actual_receiver_id:
-                        raise ValueError("نمی‌توان آیدی عددی گیرنده را پیدا کرد")
+                actual_receiver_id = resolve_user_id(receiver_id, receiver_username)
+                if not actual_receiver_id:
+                    logger.warning("Could not resolve user_id for %s, using placeholder", receiver_id)
+                    actual_receiver_id = "0"  # مقدار پیش‌فرض برای ادامه کار
 
-                    receiver_first_name = get_user_first_name(actual_receiver_id)
-                    receiver_display_name = f"@{receiver_username}" if receiver_username else str(actual_receiver_id)
+                receiver_first_name = get_user_first_name(actual_receiver_id) if actual_receiver_id != "0" else "Unknown User"
+                receiver_display_name = f"@{receiver_username}" if receiver_username else str(actual_receiver_id)
 
-                    profile_photo, profile_photo_url = get_user_profile_photo(int(actual_receiver_id))
+                profile_photo, profile_photo_url = get_user_profile_photo(int(actual_receiver_id)) if actual_receiver_id != "0" else (None, None)
 
-                    existing_receiver = next((r for r in history.get(sender_id, []) if r.get("receiver_id") == (f"@{receiver_username}" if receiver_username else str(actual_receiver_id))), None)
-                    if not existing_receiver:
-                        if sender_id not in history:
-                            history[sender_id] = []
-                        receiver_data = {
-                            "receiver_id": f"@{receiver_username}" if receiver_username else str(actual_receiver_id),
-                            "display_name": receiver_display_name,
-                            "first_name": receiver_first_name,
-                            "profile_photo_url": profile_photo_url if profile_photo_url else "",
-                            "curious_users": []
-                        }
-                        history[sender_id].append(receiver_data)
-                        history[sender_id] = history[sender_id][-10:]
-                        save_history(sender_id, receiver_data)
-
-                    unique_id = uuid.uuid4().hex
-                    sender_username = sender.get("username", "").lstrip('@').lower() if sender.get("username") else None
-                    sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
-
-                    whispers[unique_id] = {
-                        "sender_id": sender_id,
-                        "sender_username": sender_username,
-                        "sender_display_name": sender_display_name,
-                        "receiver_username": receiver_username,
-                        "receiver_user_id": actual_receiver_id,
-                        "receiver_id": actual_receiver_id,
-                        "receiver_display_name": receiver_display_name,
+                existing_receiver = next((r for r in history.get(sender_id, []) if r.get("receiver_id") == (f"@{receiver_username}" if receiver_username else str(actual_receiver_id))), None)
+                if not existing_receiver:
+                    if sender_id not in history:
+                        history[sender_id] = []
+                    receiver_data = {
+                        "receiver_id": f"@{receiver_username}" if receiver_username else str(actual_receiver_id),
+                        "display_name": receiver_display_name,
                         "first_name": receiver_first_name,
-                        "secret_message": secret_message,
-                        "curious_users": [],
-                        "receiver_views": [],
-                        "created_at": time.time()
+                        "profile_photo_url": profile_photo_url if profile_photo_url else "",
+                        "curious_users": []
                     }
-                    save_whispers(whispers)
+                    history[sender_id].append(receiver_data)
+                    history[sender_id] = history[sender_id][-10:]
+                    save_history(sender_id, receiver_data)
 
-                    receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                    receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
-                    code_content = format_block_code(whispers[unique_id])
-                    public_text = f"{receiver_link}\n```\n{code_content}\n```"
+                unique_id = uuid.uuid4().hex
+                sender_username = sender.get("username", "").lstrip('@').lower() if sender.get("username") else None
+                sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
 
-                    reply_target = f"@{sender_username}" if sender_username else str(sender_id)
-                    reply_text = f"{reply_target} "
-                    keyboard = {
-                        "inline_keyboard": [
-                            [
-                                {"text": "👁️ Show", "callback_data": f"show_{unique_id}"},
-                                {"text": "🗨️ Reply", "switch_inline_query_current_chat": reply_text}
-                            ],
-                            [
-                                {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
-                            ]
+                whispers[unique_id] = {
+                    "sender_id": sender_id,
+                    "sender_username": sender_username,
+                    "sender_display_name": sender_display_name,
+                    "receiver_username": receiver_username,
+                    "receiver_user_id": actual_receiver_id,
+                    "receiver_id": actual_receiver_id,
+                    "receiver_display_name": receiver_display_name,
+                    "first_name": receiver_first_name,
+                    "secret_message": secret_message,
+                    "curious_users": [],
+                    "receiver_views": [],
+                    "created_at": time.time()
+                }
+                save_whispers(whispers)
+
+                receiver_first_name_escaped = escape_markdown(receiver_first_name)
+                receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
+                code_content = format_block_code(whispers[unique_id])
+                public_text = f"{receiver_link}\n```\n{code_content}\n```"
+
+                reply_target = f"@{sender_username}" if sender_username else str(sender_id)
+                reply_text = f"{reply_target} "
+                keyboard = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "👁️ Show", "callback_data": f"show_{unique_id}"},
+                            {"text": "🗨️ Reply", "switch_inline_query_current_chat": reply_text}
+                        ],
+                        [
+                            {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
                         ]
-                    }
-
-                    results = [
-                        {
-                            "type": "article",
-                            "id": unique_id,
-                            "title": f"🔒 نجوا به {receiver_first_name} 🎉",
-                            "input_message_content": {
-                                "message_text": public_text,
-                                "parse_mode": "MarkdownV2"
-                            },
-                            "reply_markup": keyboard,
-                            "description": f"پیام: {secret_message[:15]}...",
-                            "thumb_url": profile_photo_url if profile_photo_url else "https://via.placeholder.com/150"
-                        },
-                        base_result
                     ]
-                    set_cached_inline_query(sender_id, query_text, results)
-                    answer_inline_query(query_id, results)
+                }
+
+                results = [
+                    {
+                        "type": "article",
+                        "id": unique_id,
+                        "title": f"🔒 نجوا به {receiver_first_name} 🎉",
+                        "input_message_content": {
+                            "message_text": public_text,
+                            "parse_mode": "MarkdownV2"
+                        },
+                        "reply_markup": keyboard,
+                        "description": f"پیام: {secret_message[:15]}...",
+                        "thumb_url": profile_photo_url if profile_photo_url else "https://via.placeholder.com/150"
+                    },
+                    base_result
+                ]
+                set_cached_inline_query(sender_id, query_text, results)
+                answer_inline_query(query_id, results)
             else:
                 set_cached_inline_query(sender_id, query_text, results)
                 answer_inline_query(query_id, results)
