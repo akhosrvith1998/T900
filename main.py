@@ -50,13 +50,17 @@ def resolve_user_id(receiver_id, sender_id=None, sender_username=None):
                 logger.info("Resolved username @%s to ID %s", username, user_id)
                 return user_id
             else:
-                logger.error("Failed to resolve username @%s: %s", username, resp.get('description', 'Unknown error'))
+                logger.error("Failed to resolve username @%s: %s (Error code: %s)", 
+                             username, resp.get('description', 'Unknown error'), resp.get('error_code', 'N/A'))
                 return None
+        except requests.RequestException as e:
+            logger.error("Network error resolving username @%s: %s", username, str(e))
+            return None
         except Exception as e:
-            logger.error("Error resolving username @%s: %s", username, str(e))
+            logger.error("Unexpected error resolving username @%s: %s", username, str(e))
             return None
     elif receiver_id.isdigit():
-        logger.info("Using numeric ID: %s", receiver dru_id)
+        logger.info("Using numeric ID: %s", receiver_id)
         return receiver_id
     logger.error("Invalid receiver ID format: %s", receiver_id)
     return None
@@ -76,42 +80,48 @@ def process_update(update):
         
         logger.info("Processing inline query from %s: '%s'", sender_id, query)
 
-        if query:
+        receiver_id = None
+        display_name = None
+        first_name = None
+        username = None
+        photo_url = "https://via.placeholder.com/150"
+        secret_message = ""
+
+        # Check if the query is in a group and is a reply
+        if inline_query.get("chat_type") in ["group", "supergroup"] and "message" in inline_query and "reply_to_message" in inline_query["message"]:
+            replied_user = inline_query["message"]["reply_to_message"]["from"]
+            receiver_id = str(replied_user["id"])
+            first_name = replied_user.get("first_name", "Unknown")
+            username = replied_user.get("username", "").lstrip('@') if replied_user.get("username") else None
+            display_name = f"{first_name} {replied_user.get('last_name', '')}".strip()
+            secret_message = query  # Use the entire query as the secret message
+            _, photo_url = get_user_profile_photo(int(receiver_id))
+            logger.info("Detected reply to user %s (%s) in group", display_name, receiver_id)
+        elif query:
+            # Fallback to username/ID
             parts = query.split(maxsplit=1)
-            if len(parts) >= 1:
-                target = parts[0]
-                secret_message = parts[1] if len(parts) > 1 else ""
-                
-                receiver_id = resolve_user_id(target, sender_id, sender_username)
-                
-                if not receiver_id:
-                    logger.warning("Invalid user ID or username: %s", target)
-                    answer_inline_query(inline_query["id"], [{
-                        "type": "article",
-                        "id": "error",
-                        "title": "❌ User not found!",
-                        "input_message_content": {"message_text": "Error: Username not found, user may not exist, or bot is blocked!"}
-                    }])
-                    return
-                
-                try:
-                    user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
-                    if not user_info.get('ok'):
-                        logger.error("Failed to get user info for %s: %s", receiver_id, user_info.get('description', 'Unknown error'))
-                        answer_inline_query(inline_query["id"], [{
-                            "type": "article",
-                            "id": "error",
-                            "title": "❌ User not found!",
-                            "input_message_content": {"message_text": "Error: Unable to fetch user info!"}
-                        }])
-                        return
-                    user_info = user_info['result']
-                    first_name = user_info.get('first_name', 'Unknown')
-                    username = user_info.get('username', '')
-                    display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
-                    logger.info("User info for %s: display_name=%s, username=%s", receiver_id, display_name, username)
-                except Exception as e:
-                    logger.error("Error getting user info for %s: %s", receiver_id, str(e))
+            target = parts[0] if parts else ''
+            secret_message = parts[1] if len(parts) > 1 else ""
+            
+            receiver_id = resolve_user_id(target, sender_id, sender_username)
+            
+            if not receiver_id:
+                logger.warning("Invalid user ID or username: %s", target)
+                answer_inline_query(inline_query["id"], [{
+                    "type": "article",
+                    "id": "error",
+                    "title": "❌ User not found!",
+                    "input_message_content": {
+                        "message_text": "Error: Username not found, user may not exist, or bot is blocked! Try replying to a message in a group."
+                    }
+                }])
+                return
+            
+            try:
+                user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
+                if not user_info.get('ok'):
+                    logger.error("Failed to get user info for %s: %s (Error code: %s)", 
+                                 receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
                     answer_inline_query(inline_query["id"], [{
                         "type": "article",
                         "id": "error",
@@ -119,74 +129,88 @@ def process_update(update):
                         "input_message_content": {"message_text": "Error: Unable to fetch user info!"}
                     }])
                     return
+                user_info = user_info['result']
+                first_name = user_info.get('first_name', 'Unknown')
+                username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+                display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                _, photo_url = get_user_profile_photo(int(receiver_id))
+                logger.info("User info for %s: display_name=%s, username=%s", receiver_id, display_name, username)
+            except Exception as e:
+                logger.error("Error getting user info for %s: %s", receiver_id, str(e))
+                answer_inline_query(inline_query["id"], [{
+                    "type": "article",
+                    "id": "error",
+                    "title": "❌ User not found!",
+                    "input_message_content": {"message_text": "Error: Unable to fetch user info!"}
+                }])
+                return
 
-                message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})"
-                code_content = f"{display_name} 0 | Not yet\n__________\nNothing"
-                public_text = f"{message_text}\n```\n{code_content}\n```"
+        if secret_message:
+            message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})"
+            code_content = f"{display_name} 0 | Not yet\n__________\nNothing"
+            public_text = f"{message_text}\n```\n{code_content}\n```"
 
-                unique_id = uuid.uuid4().hex
-                markup = {
-                    "inline_keyboard": [
-                        [
-                            {"text": "Show", "callback_data": f"show_{unique_id}"},
-                            {"text": "Reply", "switch_inline_query_current_chat": f"{inline_query['from']['id']}"}
-                        ],
-                        [
-                            {"text": "Secret Room", "callback_data": f"secret_{unique_id}"}
-                        ]
+            unique_id = uuid.uuid4().hex
+            markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "Show", "callback_data": f"show_{unique_id}"},
+                        {"text": "Reply", "switch_inline_query_current_chat": f"{inline_query['from']['id']}"}
+                    ],
+                    [
+                        {"text": "Secret Room", "callback_data": f"secret_{unique_id}"}
                     ]
-                }
+                ]
+            }
 
-                if secret_message:
-                    whispers[unique_id] = {
-                        "sender_id": str(inline_query["from"]["id"]),
-                        "sender_username": inline_query["from"].get("username", "").lstrip('@'),
-                        "receiver_id": receiver_id,
-                        "receiver_username": username.lstrip('@') if username else None,
-                        "receiver_user_id": receiver_id,
-                        "first_name": first_name,
-                        "display_name": display_name,
-                        "secret_message": secret_message,
-                        "receiver_views": [],
-                        "curious_users": []
-                    }
-                    save_whispers(whispers)
+            whispers[unique_id] = {
+                "sender_id": sender_id,
+                "sender_username": sender_username.lstrip('@') if sender_username else None,
+                "receiver_id": receiver_id,
+                "receiver_username": username,
+                "receiver_user_id": receiver_id,
+                "first_name": first_name,
+                "display_name": display_name,
+                "secret_message": secret_message,
+                "receiver_views": [],
+                "curious_users": []
+            }
+            save_whispers(whispers)
 
-                    _, photo_url = get_user_profile_photo(int(receiver_id))
-                    history_entry = {
-                        "receiver_id": receiver_id,
-                        "display_name": display_name,
-                        "first_name": first_name,
-                        "profile_photo_url": photo_url,
-                        "time": time.time()
-                    }
-                    try:
-                        save_history(inline_query['from']['id'], history_entry)
-                        load_history()  # دوباره لود کن تا مطمئن بشیم آپدیت شده
-                        logger.info("Saved history for sender %s, receiver %s", sender_id, receiver_id)
-                    except Exception as e:
-                        logger.error("Error saving history: %s", str(e))
+            history_entry = {
+                "receiver_id": receiver_id,
+                "display_name": display_name,
+                "first_name": first_name,
+                "profile_photo_url": photo_url,
+                "time": time.time()
+            }
+            try:
+                save_history(sender_id, history_entry)
+                load_history()  # Reload to ensure history is updated
+                logger.info("Saved history for sender %s, receiver %s", sender_id, receiver_id)
+            except Exception as e:
+                logger.error("Error saving history: %s", str(e))
 
-                    answer_inline_query(inline_query["id"], [{
-                        "type": "article",
-                        "id": receiver_id,
-                        "title": f"Send whisper to {display_name}",
-                        "description": f"Message: {secret_message[:20]}...",
-                        "thumb_url": photo_url,
-                        "input_message_content": {
-                            "message_text": public_text,
-                            "parse_mode": "MarkdownV2"
-                        },
-                        "reply_markup": markup
-                    }])
-                    return
+            answer_inline_query(inline_query["id"], [{
+                "type": "article",
+                "id": receiver_id,
+                "title": f"Send whisper to {display_name}",
+                "description": f"Message: {secret_message[:20]}...",
+                "thumb_url": photo_url,
+                "input_message_content": {
+                    "message_text": public_text,
+                    "parse_mode": "MarkdownV2"
+                },
+                "reply_markup": markup
+            }])
+            return
 
         results = [{
             "type": "article",
             "id": "help",
             "title": "Help",
             "input_message_content": {
-                "message_text": "To send a whisper:\n@Bgnabot [ID/username] [message]"
+                "message_text": "To send a whisper:\n@Bgnabot [ID/username] [message]\nOr reply to a message in a group with @Bgnabot [message]"
             },
             "thumb_url": "https://via.placeholder.com/150"
         }]
