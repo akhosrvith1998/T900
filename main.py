@@ -218,8 +218,11 @@ def process_update(update):
                 if not actual_receiver_id:
                     logger.warning("Could not resolve user_id for %s, using placeholder", receiver_id)
                     actual_receiver_id = "0"  # مقدار پیش‌فرض برای ادامه کار
+                    # به جای "Unknown User" از یوزرنیم بدون @ استفاده می‌کنیم
+                    receiver_first_name = receiver_username if receiver_username else "کاربر ناشناس"
+                else:
+                    receiver_first_name = get_user_first_name(actual_receiver_id)
 
-                receiver_first_name = get_user_first_name(actual_receiver_id) if actual_receiver_id != "0" else "Unknown User"
                 receiver_display_name = f"@{receiver_username}" if receiver_username else str(actual_receiver_id)
 
                 profile_photo, profile_photo_url = get_user_profile_photo(int(actual_receiver_id)) if actual_receiver_id != "0" else (None, None)
