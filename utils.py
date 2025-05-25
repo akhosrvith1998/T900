@@ -22,7 +22,7 @@ def get_user_profile_photo(user_id):
 def escape_markdown(text):
     """فرمت کردن متن برای MarkdownV2"""
     escape_chars = '_*[]()~>#+-=|{}.!'
-    return ''.join(['\\' + char if char in escape_chars else char for char in text])
+    return ''.join(['\\' + char if char in escape_chars else char for char in str(text)])
 
 def get_irst_time(timestamp):
     """تبدیل زمان به وقت ایران"""
@@ -70,7 +70,7 @@ def edit_message_text(chat_id=None, message_id=None, inline_message_id=None, tex
 
 def format_block_code(whisper_data):
     """فرمت کردن اطلاعات نجوا برای نمایش در بلاک کد"""
-    receiver_first_name = whisper_data['first_name']  # فقط نام گیرنده داخل بلاک کد
+    receiver_first_name = whisper_data.get('first_name', 'Unknown')  # فقط نام گیرنده
     view_times = whisper_data.get("receiver_views", [])
     view_count = len(view_times)
     view_time_str = get_irst_time(view_times[-1]) if view_times else "Don't see."
