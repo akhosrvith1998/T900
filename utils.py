@@ -70,11 +70,11 @@ def edit_message_text(chat_id=None, message_id=None, inline_message_id=None, tex
 
 def format_block_code(whisper_data):
     """فرمت کردن اطلاعات نجوا برای نمایش در بلاک کد"""
-    receiver_display_name = whisper_data['receiver_display_name']
+    receiver_first_name = whisper_data['first_name']  # فقط نام گیرنده داخل بلاک کد
     view_times = whisper_data.get("receiver_views", [])
     view_count = len(view_times)
     view_time_str = get_irst_time(view_times[-1]) if view_times else "Don't see."
-    code_content = f"{escape_markdown(receiver_display_name)} {view_count} | {view_time_str}\n___________"
+    code_content = f"{escape_markdown(receiver_first_name)} {view_count} | {view_time_str}\n___________"
     curious_users = whisper_data.get("curious_users", set())
     if curious_users:
         code_content += "\nCurious\n" + "\n".join([escape_markdown(user) for user in sorted(curious_users)])
