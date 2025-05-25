@@ -114,14 +114,15 @@ def process_update(update):
         results = [base_result]
         # نمایش تاریخچه با به‌روزرسانی عکس پروفایل
         if sender_id in history:
-            for receiver in sorted(history[sender_id], key=lambda x: x.get("display_name", "")):
+            for receiver in sorted(history.get(sender_id, []), key=lambda x: x.get("display_name", "")):
                 receiver_id = receiver.get("receiver_id", "")
                 if not receiver_id:
                     continue
-                receiver_user_id = receiver_id if receiver_id.isdigit() else None
-                receiver_first_name = receiver.get("first_name", "Unknown")
-                profile_photo, profile_photo_url = get_user_profile_photo(int(receiver_user_id)) if receiver_user_id else (None, None)
-                if profile_photo_url:
+                # 🟢 اصلاح دریافت عکس پروفایل با آیدی عددی
+                receiver_user_id = receiver_id.split('@')[-1] if '@' in receiver_id else receiver_id
+                profile_photo, profile_photo_url = get_user_profile_photo(int(receiver_user_id))
+                # 🟢 به‌روزرسانی عکس پروفایل در تاریخچه
+                if profile_photo_url and profile_photo_url != receiver.get("profile_photo_url"):
                     receiver["profile_photo_url"] = profile_photo_url
                     save_history(sender_id, receiver)
                 result = {
@@ -131,7 +132,7 @@ def process_update(update):
                     "input_message_content": {
                         "message_text": f"📩 پیام خود را برای {receiver.get('display_name', 'Unknown')} وارد کنید"
                     },
-                    "description": f"ارسال نجوا به {receiver_first_name}",
+                    "description": f"ارسال نجوا به {receiver.get('first_name', 'Unknown')}",
                     "thumb_url": receiver.get("profile_photo_url", "https://via.placeholder.com/150")
                 }
                 results.append(result)
@@ -157,7 +158,7 @@ def process_update(update):
                         "sender_id": sender_id,
                         "receiver_username": receiver_username,
                         "receiver_user_id": receiver_user_id,
-                        "receiver_id": receiver_id,  # اضافه کردن receiver_id برای جلوگیری از KeyError
+                        "receiver_id": receiver_id,
                         "first_name": receiver_first_name,
                         "secret_message": secret_message,
                         "curious_users": [],
@@ -199,7 +200,7 @@ def process_update(update):
                     })
                 set_cached_inline_query(sender_id, query_text, results)
                 answer_inline_query(query_id, results)
-            elif len(parts) >= 2:  # حالت‌های @username text یا 1234567890 text
+            elif len(parts) >= 2:
                 receiver_id = parts[0].strip()
                 secret_message = parts[1].strip()
 
@@ -216,16 +217,11 @@ def process_update(update):
                     return
 
                 actual_receiver_id = resolve_user_id(receiver_id, receiver_username)
+                # 🟢 اصلاح نمایش نام واقعی کاربر
                 if not actual_receiver_id:
-                    logger.warning("Could not resolve user_id for %s, using placeholder", receiver_id)
-                    actual_receiver_id = "0"  # مقدار پیش‌فرض برای ادامه کار
-                    # به جای "Unknown User" از یوزرنیم بدون @ استفاده می‌کنیم
-                    receiver_first_name = receiver_username if receiver_username else "کاربر ناشناس"
+                    receiver_first_name = "کاربر ناشناس"  # به جای استفاده از یوزرنیم
                 else:
                     receiver_first_name = get_user_first_name(actual_receiver_id)
-
-                # 🟢 تغییر اول: نمایش نام واقعی به جای یوزرنیم
-                receiver_display_name = receiver_first_name  # قبلاً: f"@{receiver_username}"...
 
                 profile_photo, profile_photo_url = get_user_profile_photo(int(actual_receiver_id)) if actual_receiver_id != "0" else (None, None)
 
@@ -233,10 +229,10 @@ def process_update(update):
                 if not existing_receiver:
                     if sender_id not in history:
                         history[sender_id] = []
-                    # 🟢 تغییر سوم: ذخیره نام واقعی در تاریخچه
+                    # 🟢 اصلاح ذخیره‌سازی تاریخچه با نام واقعی
                     receiver_data = {
                         "receiver_id": f"@{receiver_username}" if receiver_username else str(actual_receiver_id),
-                        "display_name": receiver_first_name,  # قبلاً: receiver_display_name
+                        "display_name": receiver_first_name,  # نام واقعی
                         "first_name": receiver_first_name,
                         "profile_photo_url": profile_photo_url if profile_photo_url else "",
                         "curious_users": []
@@ -256,7 +252,7 @@ def process_update(update):
                     "receiver_username": receiver_username,
                     "receiver_user_id": actual_receiver_id,
                     "receiver_id": actual_receiver_id,
-                    "receiver_display_name": receiver_display_name,
+                    "receiver_display_name": receiver_first_name,
                     "first_name": receiver_first_name,
                     "secret_message": secret_message,
                     "curious_users": [],
@@ -266,8 +262,9 @@ def process_update(update):
                 save_whispers(whispers)
 
                 receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                # 🟢 تغییر دوم: اصلاح ساخت لینک کاربر
-                receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"  # قبلاً: لینک به یوزرنیم
+                # 🟢 اصلاح لینک به صورت مستقیم با آیدی کاربر
+                receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
+
                 code_content = format_block_code(whispers[unique_id])
                 public_text = f"{receiver_link}\n```\n{code_content}\n```"
 
@@ -285,21 +282,20 @@ def process_update(update):
                     ]
                 }
 
-                results = [
-                    {
-                        "type": "article",
-                        "id": unique_id,
-                        "title": f"🔒 نجوا به {receiver_first_name} 🎉",
-                        "input_message_content": {
-                            "message_text": public_text,
-                            "parse_mode": "MarkdownV2"
-                        },
-                        "reply_markup": keyboard,
-                        "description": f"پیام: {secret_message[:15]}...",
-                        "thumb_url": profile_photo_url if profile_photo_url else "https://via.placeholder.com/150"
+                # 🟢 اصلاح عنوان و توضیحات نتیجه اینلاین
+                results.append({
+                    "type": "article",
+                    "id": unique_id,
+                    "title": f"🔒 نجوا به {receiver_first_name} 🎉",  # نام واقعی
+                    "input_message_content": {
+                        "message_text": public_text,
+                        "parse_mode": "MarkdownV2"
                     },
-                    base_result
-                ]
+                    "reply_markup": keyboard,
+                    "description": f"پیام: {secret_message[:15]}...",
+                    "thumb_url": profile_photo_url if profile_photo_url else "https://via.placeholder.com/150"
+                })
+
                 set_cached_inline_query(sender_id, query_text, results)
                 answer_inline_query(query_id, results)
             else:
