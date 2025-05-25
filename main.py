@@ -9,10 +9,10 @@ from database import load_history, save_history, history
 from cache import get_cached_inline_query, set_cached_inline_query
 from logger import logger
 
-# فایل برای ذخیره دائمی whispers
+# File for persistent whispers storage
 WHISPERS_FILE = "whispers.json"
 
-# بارگذاری whispers از فایل
+# Load whispers from file
 def load_whispers():
     try:
         with open(WHISPERS_FILE, "r") as f:
@@ -27,7 +27,7 @@ def load_whispers():
         logger.error("Error loading whispers: %s", str(e))
         return {}
 
-# ذخیره whispers در فایل
+# Save whispers to file
 def save_whispers(whispers_data):
     try:
         with open(WHISPERS_FILE, "w") as f:
@@ -41,7 +41,7 @@ TOKEN = os.getenv("BOT_TOKEN", "7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc")
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 
 def resolve_user_id(receiver_id):
-    """تبدیل یوزرنیم/آیدی به آیدی عددی"""
+    """Convert username/ID to numeric ID"""
     if receiver_id.startswith('@'):
         username = receiver_id.lstrip('@')
         try:
@@ -54,14 +54,15 @@ def resolve_user_id(receiver_id):
     return None
 
 def process_update(update):
-    """پردازش آپدیت‌های دریافتی از تلگرام"""
+    """Process updates received from Telegram"""
     global whispers
 
     if "inline_query" in update:
         inline_query = update["inline_query"]
         query = inline_query.get("query", "").replace(BOT_USERNAME, "").strip()
+        sender_id = str(inline_query['from']['id'])
         
-        # پردازش کوئری‌های معتبر
+        # Process valid queries
         if query:
             parts = query.split(maxsplit=1)
             if len(parts) == 2:
@@ -72,36 +73,54 @@ def process_update(update):
                     answer_inline_query(inline_query["id"], [{
                         "type": "article",
                         "id": "error",
-                        "title": "❌ کاربر یافت نشد!",
-                        "input_message_content": {"message_text": "خطا: شناسه کاربر نامعتبر است!"}
+                        "title": "❌ User not found!",
+                        "input_message_content": {"message_text": "Error: Invalid user ID!"}
                     }])
                     return
                 
-                # دریافت اطلاعات کاربر
+                # Get user info
                 try:
                     user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}).json()['result']
-                    first_name = user_info.get('first_name', 'ناشناس')
+                    first_name = user_info.get('first_name', 'Unknown')
                     username = user_info.get('username', '')
                 except:
-                    first_name = "ناشناس"
+                    first_name = "Unknown"
                     username = ""
 
-                # ساخت محتوای پیام
-                message_link = f"[{escape_markdown(first_name)}](tg://user?id={receiver_id})"
-                code_content = f"{first_name} 0 | ۰۰:۰۰\n__________\nبدون بازدید"
-                public_text = f"{message_link}\n```\n{code_content}\n```"
+                # Create message content (profile name with link)
+                message_text = f"[{escape_markdown(first_name)}](tg://user?id={receiver_id})"
+                code_content = f"{first_name} 0 | Not yet\n__________\nNothing"
+                public_text = f"{message_text}\n```\n{code_content}\n```"
 
-                # ساخت دکمه‌های تعاملی
+                # Create interactive buttons
+                unique_id = uuid.uuid4().hex
                 markup = {
                     "inline_keyboard": [
                         [
-                            {"text": "👁️ نمایش", "callback_data": f"show_{uuid.uuid4().hex}"},
-                            {"text": "🗨️ پاسخ", "switch_inline_query_current_chat": f"{inline_query['from']['id']}"}
+                            {"text": "Show", "callback_data": f"show_{unique_id}"},
+                            {"text": "Reply", "switch_inline_query_current_chat": f"{inline_query['from']['id']}"}
+                        ],
+                        [
+                            {"text": "Secret Room", "callback_data": f"secret_{unique_id}"}
                         ]
                     ]
                 }
 
-                # دریافت و ذخیره عکس پروفایل
+                # Store whisper data
+                whispers[unique_id] = {
+                    "sender_id": str(inline_query["from"]["id"]),
+                    "sender_username": inline_query["from"].get("username", "").lstrip('@'),
+                    "receiver_id": receiver_id,
+                    "receiver_username": username.lstrip('@') if username else None,
+                    "receiver_user_id": receiver_id,
+                    "first_name": first_name,
+                    "secret_message": secret_message,
+                    "receiver_views": [],
+                    "curious_users": []
+                }
+                save_whispers(whispers)
+
+                # Get and store profile photo
                 _, photo_url = get_user_profile_photo(int(receiver_id))
                 history_entry = {
                     "receiver_id": receiver_id,
@@ -111,12 +130,12 @@ def process_update(update):
                 }
                 save_history(inline_query['from']['id'], history_entry)
 
-                # ارسال نتیجه
+                # Send result
                 answer_inline_query(inline_query["id"], [{
                     "type": "article",
                     "id": receiver_id,
-                    "title": f"🔐 ارسال نجوا به {first_name}",
-                    "description": f"پیام: {secret_message[:20]}...",
+                    "title": f"Send whisper to {first_name}",
+                    "description": f"Message: {secret_message[:20]}...",
                     "thumb_url": photo_url,
                     "input_message_content": {
                         "message_text": public_text,
@@ -126,30 +145,29 @@ def process_update(update):
                 }])
                 return
 
-        # نمایش تاریخچه
-        sender_id = str(inline_query['from']['id'])
+        # Show history and help
         results = [{
             "type": "article",
             "id": "help",
-            "title": "💡 راهنمای استفاده",
+            "title": "Help",
             "input_message_content": {
-                "message_text": "برای ارسال نجوا:\n@Bgnabot [آدی/یوزرنیم] [متن پیام]"
+                "message_text": "To send a whisper:\n@Bgnabot [ID/username] [message]"
             },
             "thumb_url": "https://via.placeholder.com/150"
         }]
         
         if sender_id in history:
             for item in history[sender_id]:
-                # دریافت عکس به روز شده
+                # Get updated profile photo
                 _, photo = get_user_profile_photo(int(item['receiver_id']))
                 results.append({
                     "type": "article",
                     "id": f"hist_{item['receiver_id']}",
-                    "title": f"✉️ تاریخچه نجوا به {item['name']}",
-                    "description": f"آخرین ارسال: {get_irst_time(item['time'])}",
-                    "thumb_url": photo,
+                    "title": f"Send whisper to {item['name']}",  # Use profile name
+                    "description": f"Last sent: {get_irst_time(item['time'])}",
+                    "thumb_url": photo,  # Show profile photo
                     "input_message_content": {
-                        "message_text": f"ارسال مجدد پیام به {item['name']}"
+                        "message_text": f"[{escape_markdown(item['name'])}](tg://user?id={item['receiver_id']})\nTo send again: @Bgnabot {item['receiver_id']} [message]"
                     }
                 })
         
@@ -167,7 +185,7 @@ def process_update(update):
             whisper_data = whispers.get(unique_id)
 
             if not whisper_data:
-                answer_callback_query(callback_id, "⌛️ نجوا منقضی شده! 🕒", True)
+                answer_callback_query(callback_id, "⌛ Whisper expired! 🕒", True)
                 return
 
             user = callback["from"]
@@ -190,24 +208,24 @@ def process_update(update):
                 whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
                 save_whispers(whispers)
 
+            # Show profile name with link
             receiver_first_name = whisper_data["first_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
-            receiver_username = whisper_data["receiver_username"]
             receiver_first_name_escaped = escape_markdown(receiver_first_name)
-            receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"
+            message_text = f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"
             code_content = format_block_code(whisper_data)
-            new_text = f"{receiver_link}\n```\n{code_content}\n```"
+            new_text = f"{message_text}\n```\n{code_content}\n```"
 
             reply_target = f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])
             reply_text = f"{reply_target} "
             keyboard = {
                 "inline_keyboard": [
                     [
-                        {"text": "👁️ Show", "callback_data": f"show_{unique_id}"},
-                        {"text": "🗨️ Reply", "switch_inline_query_current_chat": reply_text}
+                        {"text": "Show", "callback_data": f"show_{unique_id}"},
+                        {"text": "Reply", "switch_inline_query_current_chat": reply_text}
                     ],
                     [
-                        {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
+                        {"text": "Secret Room", "callback_data": f"secret_{unique_id}"}
                     ]
                 ]
             }
@@ -227,18 +245,18 @@ def process_update(update):
                         reply_markup=keyboard
                     )
 
-                response_text = f"🔐 پیام نجوا:\n{whisper_data['secret_message']} 🎁" if is_allowed else "⚠️ این نجوا برای تو نیست! 😕"
-                answer_callback_query(callback_id, response_text, show_alert=True)
+                response_text = f"🔐 Whisper message:\n{whisper_data['secret_message']} 🎁" if is_allowed else "⚠️ This whisper isn't for you! 😕"
+                answer_callback_query(callback_id, response_text, True)
             except Exception as e:
                 logger.error("Error editing message: %s", str(e))
-                answer_callback_query(callback_id, "خطایی رخ داد. دوباره امتحان کنید!", True)
+                answer_callback_query(callback_id, "An error occurred. Try again!", True)
 
         elif data.startswith("secret_"):
             unique_id = data.split("_")[1]
             whisper_data = whispers.get(unique_id)
 
             if not whisper_data:
-                answer_callback_query(callback_id, "⌛️ نجوا منقضی شده! 🕒", True)
+                answer_callback_query(callback_id, "⌛ Whisper expired! 🕒", True)
                 return
 
             user = callback["from"]
@@ -246,7 +264,7 @@ def process_update(update):
             is_allowed = user_id == whisper_data["sender_id"]
 
             if is_allowed:
-                response_text = f"🔐 Secret Room:\n{whisper_data['secret_message']} 🎁\nاینجا فقط فرستنده می‌تونه پیام رو ببینه!"
+                response_text = f"🔐 Secret Room:\n{whisper_data['secret_message']} 🎁\nOnly the sender can see this!"
             else:
-                response_text = "⚠️ فقط فرستنده می‌تونه به Secret Room دسترسی داشته باشه! 😈"
-            answer_callback_query(callback_id, response_text, show_alert=True)
+                response_text = "⚠️ Only the sender can access the Secret Room! 😈"
+            answer_callback_query(callback_id, response_text, True)
