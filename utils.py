@@ -74,7 +74,7 @@ def format_block_code(whisper_data):
     view_times = whisper_data.get("receiver_views", [])
     view_count = len(view_times)
     view_time_str = get_irst_time(view_times[-1]) if view_times else "Don't see."
-    code_content = f"{escape_markdown(receiver_display_name)} {view_count} | {view_time_str}\n___"
+    code_content = f"{escape_markdown(receiver_display_name)} {view_count} | {view_time_str}\n___________"
     curious_users = whisper_data.get("curious_users", set())
     if curious_users:
         code_content += "\nCurious\n" + "\n".join([escape_markdown(user) for user in sorted(curious_users)])
