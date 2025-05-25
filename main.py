@@ -65,7 +65,7 @@ def process_update(update):
         # Process valid queries
         if query:
             parts = query.split(maxsplit=1)
-            if len(parts) == 2:
+            if len(parts) == 2:  # Username/ID + message
                 target, secret_message = parts
                 receiver_id = resolve_user_id(target)
                 
@@ -83,13 +83,15 @@ def process_update(update):
                     user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}).json()['result']
                     first_name = user_info.get('first_name', 'Unknown')
                     username = user_info.get('username', '')
+                    display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
                 except:
                     first_name = "Unknown"
                     username = ""
+                    display_name = "Unknown"
 
                 # Create message content (profile name with link)
-                message_text = f"[{escape_markdown(first_name)}](tg://user?id={receiver_id})"
-                code_content = f"{first_name} 0 | Not yet\n__________\nNothing"
+                message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})"
+                code_content = f"{display_name} 0 | Not yet\n__________\nNothing"
                 public_text = f"{message_text}\n```\n{code_content}\n```"
 
                 # Create interactive buttons
@@ -114,6 +116,7 @@ def process_update(update):
                     "receiver_username": username.lstrip('@') if username else None,
                     "receiver_user_id": receiver_id,
                     "first_name": first_name,
+                    "display_name": display_name,  # Added for consistency
                     "secret_message": secret_message,
                     "receiver_views": [],
                     "curious_users": []
@@ -124,8 +127,9 @@ def process_update(update):
                 _, photo_url = get_user_profile_photo(int(receiver_id))
                 history_entry = {
                     "receiver_id": receiver_id,
-                    "name": first_name,
-                    "photo": photo_url,
+                    "display_name": display_name,  # Fixed for database.py
+                    "first_name": first_name,
+                    "profile_photo_url": photo_url,
                     "time": time.time()
                 }
                 save_history(inline_query['from']['id'], history_entry)
@@ -134,7 +138,7 @@ def process_update(update):
                 answer_inline_query(inline_query["id"], [{
                     "type": "article",
                     "id": receiver_id,
-                    "title": f"Send whisper to {first_name}",
+                    "title": f"Send whisper to {display_name}",
                     "description": f"Message: {secret_message[:20]}...",
                     "thumb_url": photo_url,
                     "input_message_content": {
@@ -163,11 +167,11 @@ def process_update(update):
                 results.append({
                     "type": "article",
                     "id": f"hist_{item['receiver_id']}",
-                    "title": f"Send whisper to {item['name']}",  # Use profile name
+                    "title": f"Send whisper to {item['display_name']}",  # Use display name
                     "description": f"Last sent: {get_irst_time(item['time'])}",
                     "thumb_url": photo,  # Show profile photo
                     "input_message_content": {
-                        "message_text": f"[{escape_markdown(item['name'])}](tg://user?id={item['receiver_id']})\nTo send again: @Bgnabot {item['receiver_id']} [message]"
+                        "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id']})\nTo send again: @Bgnabot {item['receiver_id']} [message]"
                     }
                 })
         
@@ -209,10 +213,9 @@ def process_update(update):
                 save_whispers(whispers)
 
             # Show profile name with link
-            receiver_first_name = whisper_data["first_name"]
+            receiver_display_name = whisper_data["display_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
-            receiver_first_name_escaped = escape_markdown(receiver_first_name)
-            message_text = f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"
+            message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})"
             code_content = format_block_code(whisper_data)
             new_text = f"{message_text}\n```\n{code_content}\n```"
 
