@@ -46,11 +46,19 @@ def resolve_user_id(receiver_id):
         username = receiver_id.lstrip('@')
         try:
             resp = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}).json()
-            return str(resp['result']['id']) if resp.get('ok') else None
-        except:
+            if resp.get('ok'):
+                logger.info("Resolved username @%s to ID %s", username, resp['result']['id'])
+                return str(resp['result']['id'])
+            else:
+                logger.error("Failed to resolve username @%s: %s", username, resp.get('description', 'Unknown error'))
+                return None
+        except Exception as e:
+            logger.error("Error resolving username @%s: %s", username, str(e))
             return None
     elif receiver_id.isdigit():
+        logger.info("Using numeric ID: %s", receiver_id)
         return receiver_id
+    logger.error("Invalid receiver ID format: %s", receiver_id)
     return None
 
 def process_update(update):
@@ -59,14 +67,23 @@ def process_update(update):
 
     if "inline_query" in update:
         inline_query = update["inline_query"]
-        query = inline_query.get("query", "").replace(BOT_USERNAME, "").strip()
+        query = inline_query.get("query", "").strip()
         sender_id = str(inline_query['from']['id'])
+
+        # Remove bot username if present
+        if query.startswith(BOT_USERNAME):
+            query = query[len(BOT_USERNAME):].strip()
         
-        # Process valid queries
+        logger.info("Processing inline query: %s", query)
+
+        # Process queries
         if query:
+            # Split query into target and message
             parts = query.split(maxsplit=1)
-            if len(parts) == 2:  # Username/ID + message
-                target, secret_message = parts
+            if len(parts) >= 1:  # At least target is provided
+                target = parts[0]
+                secret_message = parts[1] if len(parts) > 1 else ""
+                
                 receiver_id = resolve_user_id(target)
                 
                 if not receiver_id:
@@ -74,7 +91,7 @@ def process_update(update):
                         "type": "article",
                         "id": "error",
                         "title": "❌ User not found!",
-                        "input_message_content": {"message_text": "Error: Invalid user ID!"}
+                        "input_message_content": {"message_text": "Error: Invalid user ID or username!"}
                     }])
                     return
                 
@@ -84,7 +101,9 @@ def process_update(update):
                     first_name = user_info.get('first_name', 'Unknown')
                     username = user_info.get('username', '')
                     display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
-                except:
+                    logger.info("User info for %s: display_name=%s, username=%s", receiver_id, display_name, username)
+                except Exception as e:
+                    logger.error("Error getting user info for %s: %s", receiver_id, str(e))
                     first_name = "Unknown"
                     username = ""
                     display_name = "Unknown"
@@ -108,46 +127,51 @@ def process_update(update):
                     ]
                 }
 
-                # Store whisper data
-                whispers[unique_id] = {
-                    "sender_id": str(inline_query["from"]["id"]),
-                    "sender_username": inline_query["from"].get("username", "").lstrip('@'),
-                    "receiver_id": receiver_id,
-                    "receiver_username": username.lstrip('@') if username else None,
-                    "receiver_user_id": receiver_id,
-                    "first_name": first_name,
-                    "display_name": display_name,  # Added for consistency
-                    "secret_message": secret_message,
-                    "receiver_views": [],
-                    "curious_users": []
-                }
-                save_whispers(whispers)
+                # Store whisper data if there's a message
+                if secret_message:
+                    whispers[unique_id] = {
+                        "sender_id": str(inline_query["from"]["id"]),
+                        "sender_username": inline_query["from"].get("username", "").lstrip('@'),
+                        "receiver_id": receiver_id,
+                        "receiver_username": username.lstrip('@') if username else None,
+                        "receiver_user_id": receiver_id,
+                        "first_name": first_name,
+                        "display_name": display_name,
+                        "secret_message": secret_message,
+                        "receiver_views": [],
+                        "curious_users": []
+                    }
+                    save_whispers(whispers)
 
-                # Get and store profile photo
-                _, photo_url = get_user_profile_photo(int(receiver_id))
-                history_entry = {
-                    "receiver_id": receiver_id,
-                    "display_name": display_name,  # Fixed for database.py
-                    "first_name": first_name,
-                    "profile_photo_url": photo_url,
-                    "time": time.time()
-                }
-                save_history(inline_query['from']['id'], history_entry)
+                    # Get and store profile photo
+                    _, photo_url = get_user_profile_photo(int(receiver_id))
+                    history_entry = {
+                        "receiver_id": receiver_id,
+                        "display_name": display_name,
+                        "first_name": first_name,
+                        "profile_photo_url": photo_url,
+                        "time": time.time()
+                    }
+                    try:
+                        save_history(inline_query['from']['id'], history_entry)
+                        logger.info("Saved history for sender %s, receiver %s", sender_id, receiver_id)
+                    except Exception as e:
+                        logger.error("Error saving history: %s", str(e))
 
-                # Send result
-                answer_inline_query(inline_query["id"], [{
-                    "type": "article",
-                    "id": receiver_id,
-                    "title": f"Send whisper to {display_name}",
-                    "description": f"Message: {secret_message[:20]}...",
-                    "thumb_url": photo_url,
-                    "input_message_content": {
-                        "message_text": public_text,
-                        "parse_mode": "MarkdownV2"
-                    },
-                    "reply_markup": markup
-                }])
-                return
+                    # Send result
+                    answer_inline_query(inline_query["id"], [{
+                        "type": "article",
+                        "id": receiver_id,
+                        "title": f"Send whisper to {display_name}",
+                        "description": f"Message: {secret_message[:20]}...",
+                        "thumb_url": photo_url,
+                        "input_message_content": {
+                            "message_text": public_text,
+                            "parse_mode": "MarkdownV2"
+                        },
+                        "reply_markup": markup
+                    }])
+                    return
 
         # Show history and help
         results = [{
@@ -160,21 +184,26 @@ def process_update(update):
             "thumb_url": "https://via.placeholder.com/150"
         }]
         
-        if sender_id in history:
-            for item in history[sender_id]:
-                # Get updated profile photo
-                _, photo = get_user_profile_photo(int(item['receiver_id']))
-                results.append({
-                    "type": "article",
-                    "id": f"hist_{item['receiver_id']}",
-                    "title": f"Send whisper to {item['display_name']}",  # Use display name
-                    "description": f"Last sent: {get_irst_time(item['time'])}",
-                    "thumb_url": photo,  # Show profile photo
-                    "input_message_content": {
-                        "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id']})\nTo send again: @Bgnabot {item['receiver_id']} [message]"
-                    }
-                })
-        
+        # Load and display history
+        try:
+            logger.info("Loading history for sender %s: %s", sender_id, history.get(sender_id, []))
+            if sender_id in history:
+                for item in history[sender_id]:
+                    # Get updated profile photo
+                    _, photo = get_user_profile_photo(int(item['receiver_id']))
+                    results.append({
+                        "type": "article",
+                        "id": f"hist_{item['receiver_id']}",
+                        "title": f"Send whisper to {item['display_name']}",
+                        "description": f"Last sent: {get_irst_time(item['time'])}",
+                        "thumb_url": photo,
+                        "input_message_content": {
+                            "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id']})\nTo send again: @Bgnabot {item['receiver_id']} [message]"
+                        }
+                    })
+        except Exception as e:
+            logger.error("Error loading history: %s", str(e))
+
         answer_inline_query(inline_query["id"], results)
 
     elif "callback_query" in update:
@@ -209,8 +238,10 @@ def process_update(update):
                 whisper_data["receiver_views"].append(time.time())
                 save_whispers(whispers)
             elif not is_allowed:
-                whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
-                save_whispers(whispers)
+                # Check if user is already in curious_users
+                if not any(user['id'] == user_id for user in whisper_data["curious_users"]):
+                    whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
+                    save_whispers(whispers)
 
             # Show profile name with link
             receiver_display_name = whisper_data["display_name"]
