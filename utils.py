@@ -8,28 +8,29 @@ TOKEN = os.getenv("BOT_TOKEN", "7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc")
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 IRST_OFFSET = timedelta(hours=3, minutes=30)
 
-@lru_cache(maxsize=1000)
+@lru_cache(maxsize=500)
 def get_user_profile_photo(user_id):
-    """دریافت عکس پروفایل کاربر با کش"""
-    url = URL + "getUserProfilePhotos"
-    params = {"user_id": user_id, "limit": 1}
+    """دریافت عکس پروفایل با کیفیت بالا و کش پیشرفته"""
     try:
-        resp = requests.get(url, params=params).json()
+        resp = requests.get(f"{URL}getUserProfilePhotos", params={
+            "user_id": user_id,
+            "limit": 1
+        }, timeout=5).json()
+        
         if resp.get("ok") and resp["result"]["total_count"] > 0:
-            # 🟢 اولویت استفاده از عکس اصلی پروفایل
-            file_id = resp["result"]["photos"][0][-1]["file_id"]  # آخرین سایز عکس
-            file_path_url = URL + "getFile"
-            file_params = {"file_id": file_id}
-            file_resp = requests.get(file_path_url, params=file_params).json()
+            # انتخاب بهترین کیفیت عکس
+            file_id = resp["result"]["photos"][0][-1]["file_id"]
+            
+            # دریافت آدرس فایل
+            file_resp = requests.get(f"{URL}getFile", params={"file_id": file_id}).json()
             if file_resp.get("ok"):
-                file_path = file_resp["result"]["file_path"]
-                file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
-                print(f"Profile photo URL for user_id {user_id}: {file_url}")
-                return file_id, file_url
-        print(f"No profile photo found for user_id {user_id}")
-        return None, "https://via.placeholder.com/150"  # تصویر پیش‌فرض
+                return (
+                    file_id,
+                    f"https://api.telegram.org/file/bot{TOKEN}/{file_resp['result']['file_path']}"
+                )
+        return None, "https://via.placeholder.com/150/FF0000/FFFFFF?text=No+Photo"
     except Exception as e:
-        print(f"Error fetching profile photo for user_id {user_id}: {e}")
+        print(f"Error getting photo: {str(e)}")
         return None, "https://via.placeholder.com/150"
 
 def escape_markdown(text):
