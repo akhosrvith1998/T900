@@ -45,10 +45,11 @@ def resolve_user_id(receiver_id):
     if receiver_id.startswith('@'):
         username = receiver_id.lstrip('@')
         try:
-            resp = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}).json()
+            resp = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=5).json()
             if resp.get('ok'):
-                logger.info("Resolved username @%s to ID %s", username, resp['result']['id'])
-                return str(resp['result']['id'])
+                user_id = str(resp['result']['id'])
+                logger.info("Resolved username @%s to ID %s", username, user_id)
+                return user_id
             else:
                 logger.error("Failed to resolve username @%s: %s", username, resp.get('description', 'Unknown error'))
                 return None
@@ -74,7 +75,7 @@ def process_update(update):
         if query.startswith(BOT_USERNAME):
             query = query[len(BOT_USERNAME):].strip()
         
-        logger.info("Processing inline query: %s", query)
+        logger.info("Processing inline query from %s: '%s'", sender_id, query)
 
         # Process queries
         if query:
@@ -87,6 +88,7 @@ def process_update(update):
                 receiver_id = resolve_user_id(target)
                 
                 if not receiver_id:
+                    logger.warning("Invalid user ID or username: %s", target)
                     answer_inline_query(inline_query["id"], [{
                         "type": "article",
                         "id": "error",
@@ -97,16 +99,30 @@ def process_update(update):
                 
                 # Get user info
                 try:
-                    user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}).json()['result']
+                    user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=5).json()
+                    if not user_info.get('ok'):
+                        logger.error("Failed to get user info for %s: %s", receiver_id, user_info.get('description', 'Unknown error'))
+                        answer_inline_query(inline_query["id"], [{
+                            "type": "article",
+                            "id": "error",
+                            "title": "❌ User not found!",
+                            "input_message_content": {"message_text": "Error: Unable to fetch user info!"}
+                        }])
+                        return
+                    user_info = user_info['result']
                     first_name = user_info.get('first_name', 'Unknown')
                     username = user_info.get('username', '')
                     display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
                     logger.info("User info for %s: display_name=%s, username=%s", receiver_id, display_name, username)
                 except Exception as e:
                     logger.error("Error getting user info for %s: %s", receiver_id, str(e))
-                    first_name = "Unknown"
-                    username = ""
-                    display_name = "Unknown"
+                    answer_inline_query(inline_query["id"], [{
+                        "type": "article",
+                        "id": "error",
+                        "title": "❌ User not found!",
+                        "input_message_content": {"message_text": "Error: Unable to fetch user info!"}
+                    }])
+                    return
 
                 # Create message content (profile name with link)
                 message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})"
@@ -201,6 +217,8 @@ def process_update(update):
                             "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id']})\nTo send again: @Bgnabot {item['receiver_id']} [message]"
                         }
                     })
+            else:
+                logger.info("No history found for sender %s", sender_id)
         except Exception as e:
             logger.error("Error loading history: %s", str(e))
 
@@ -290,15 +308,10 @@ def process_update(update):
             whisper_data = whispers.get(unique_id)
 
             if not whisper_data:
-                answer_callback_query(callback_id, "⌛ Whisper expired! 🕒", True)
+                answer_callback_query(callback_id, "⌛ Whisper expired!", True)
                 return
 
             user = callback["from"]
             user_id = str(user["id"])
-            is_allowed = user_id == whisper_data["sender_id"]
-
-            if is_allowed:
-                response_text = f"🔐 Secret Room:\n{whisper_data['secret_message']} 🎁\nOnly the sender can see this!"
-            else:
-                response_text = "⚠️ Only the sender can access the Secret Room! 😈"
+            response_text = f"🔐 Secret Room:\n{whisper_data['secret_message']}\nOnly the sender can see this!" if user_id == whisper_data["sender_id"] else "⚠️ Only the sender can access the Secret Room! 😈"
             answer_callback_query(callback_id, response_text, True)
