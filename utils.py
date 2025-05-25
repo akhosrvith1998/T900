@@ -17,8 +17,14 @@ def get_user_profile_photo(user_id):
         resp = requests.get(url, params=params).json()
         if resp.get("ok") and resp["result"]["total_count"] > 0:
             file_id = resp["result"]["photos"][0][0]["file_id"]
-            file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_id}"
-            return file_id, file_url
+            file_path_url = URL + "getFile"
+            file_params = {"file_id": file_id}
+            file_resp = requests.get(file_path_url, params=file_params).json()
+            if file_resp.get("ok"):
+                file_path = file_resp["result"]["file_path"]
+                file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+                print(f"Profile photo URL for user_id {user_id}: {file_url}")
+                return file_id, file_url
         print(f"No profile photo found for user_id {user_id}")
         return None, None
     except Exception as e:
@@ -26,11 +32,13 @@ def get_user_profile_photo(user_id):
         return None, None
 
 def escape_markdown(text):
-    """فرمت کردن متن برای MarkdownV2"""
+    """فرمت کردن متن برای MarkdownV2 با مدیریت کاراکترهای خاص"""
     if not text:
-        return ""
-    escape_chars = '_*[]()~>#+-=|{}.!'
-    return ''.join(['\\' + char if char in escape_chars else char for char in str(text)])
+        return "Unknown"
+    escape_chars = '_*[]()~`>#+-=|{}.!'
+    escaped_text = ''.join(['\\' + char if char in escape_chars else char for char in str(text)])
+    # جلوگیری از خطاهای Markdown با جایگزینی کاراکترهای غیرمجاز
+    return escaped_text if escaped_text else "Unknown"
 
 def get_irst_time(timestamp):
     """تبدیل زمان به وقت ایران"""
