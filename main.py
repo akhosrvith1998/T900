@@ -21,9 +21,10 @@ def get_user_first_name(user_id):
         resp = requests.get(url, params=params).json()
         if resp.get("ok"):
             return resp["result"].get("first_name", "Unknown")
+        return "Unknown"
     except Exception as e:
         logger.error("Error fetching first name for user_id %s: %s", user_id, str(e))
-    return "Unknown"
+        return "Unknown"
 
 def process_update(update):
     """پردازش آپدیت‌های دریافتی از تلگرام"""
@@ -72,7 +73,7 @@ def process_update(update):
                     "thumb_url": receiver.get("profile_photo_url", "")
                 }
                 results.append(result)
-        
+
         if not query_text:
             set_cached_inline_query(sender_id, query_text, results)
             answer_inline_query(query_id, results)
@@ -87,7 +88,7 @@ def process_update(update):
                     unique_id = uuid.uuid4().hex
                     receiver_id = receiver['receiver_id']
                     receiver_username = receiver_id.lstrip('@').lower() if receiver_id.startswith('@') else None
-                    receiver_user_id = str(receiver_id) if receiver_id.isdigit() else None
+                    receiver_user_id = receiver_id if receiver_id.isdigit() else None
                     receiver_display_name = receiver['display_name']
                     receiver_first_name = receiver['first_name']
 
@@ -154,9 +155,9 @@ def process_update(update):
             receiver_user_id = None
 
             if receiver_id.startswith('@'):
-                receiver_username = receiver_id.lstrip('@').lower()
+                receiver_username = receiver_id.lstrip('@')
             elif receiver_id.isdigit():
-                receiver_user_id = receiver_id  # نگه داشتن به صورت رشته
+                receiver_user_id = receiver_id  # به صورت رشته نگه می‌داریم
             else:
                 raise ValueError("شناسه گیرنده نامعتبر")
 
@@ -165,16 +166,17 @@ def process_update(update):
             sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
             receiver_display_name = f"@{receiver_username}" if receiver_username else str(receiver_user_id)
 
-            receiver_first_name = get_user_first_name(receiver_user_id) if receiver_user_id else receiver_username
+            receiver_first_name = get_user_first_name(receiver_user_id) if receiver_user_id else receiver_username or "Unknown"
 
             profile_photo = get_user_profile_photo(int(receiver_user_id)) if receiver_user_id else None
             profile_photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{profile_photo}" if profile_photo else ""
-            existing_receiver = next((r for r in history.get(sender_id, []) if r["receiver_id"] == (receiver_username or str(receiver_user_id))), None)
+
+            existing_receiver = next((r for r in history.get(sender_id, []) if r["receiver_id"] == (f"@{receiver_username}" if receiver_username else str(receiver_user_id))), None)
             if not existing_receiver:
                 if sender_id not in history:
                     history[sender_id] = []
                 receiver_data = {
-                    "receiver_id": receiver_username or str(receiver_user_id),
+                    "receiver_id": f"@{receiver_username}" if receiver_username else str(receiver_user_id),
                     "display_name": receiver_display_name,
                     "first_name": receiver_first_name,
                     "profile_photo_url": profile_photo_url,
@@ -193,7 +195,7 @@ def process_update(update):
                 "receiver_display_name": receiver_display_name,
                 "first_name": receiver_first_name,
                 "secret_message": secret_message,
-                "curious_users": set(),
+                "curious_users": [],
                 "receiver_views": []
             }
 
@@ -205,8 +207,8 @@ def process_update(update):
             reply_text = f"{reply_target} "
             keyboard = {
                 "inline_keyboard": [[
-                    {"text": "👁️ show", "callback_data": f"show|{unique_id}"},
-                    {"text": "🗨️ reply", "switch_inline_query_current_chat": reply_text}
+                    {"text": "👁️ show", "callback_data": f"show_{unique_id}"},
+                    {"text": "🗨️ reply", "switch_inline_query_current_chat": f"{reply_text}"}
                 ]]
             }
 
@@ -235,62 +237,67 @@ def process_update(update):
     elif "callback_query" in update:
         callback = update["callback_query"]
         callback_id = callback["id"]
-        data = callback["data"]
+        data = callback.get("data")
         message = callback.get("message")
         inline_message_id = callback.get("inline_message_id")
 
-        if data.startswith("show|"):
-            _, unique_id = data.split("|", 1)
+        if data.startswith("show_"):
+            unique_id = data.split("_")[1]
             whisper_data = whispers.get(unique_id)
 
             if not whisper_data:
-                answer_callback_query(callback_id, "⌛️ نجوا منقضی شده! 🕒", True)
+                answer_callback_query(callback_id, "⌛ نجوا منقضی شده! 🗨", True)
                 return
 
-            user = callback["from"]
+            user = callback.get("from")
             user_id = str(user["id"])
             username = user.get("username", "").lstrip('@').lower() if user.get("username") else None
             first_name = user.get("first_name", "")
             last_name = user.get("last_name", "")
             user_display_name = f"{first_name} {last_name}".strip() if last_name else first_name
 
+            # شرط دقیق برای شناسایی گیرنده
             is_allowed = (
                 user_id == whisper_data["sender_id"] or
                 (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower()) or
-                (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"])
+                (whisper_data["receiver_user_id"] and user_id == str(whisper_data["receiver_user_id"]))
             )
 
             if is_allowed and user_id != whisper_data["sender_id"]:
                 whisper_data["receiver_views"].append(time.time())
             elif not is_allowed:
-                whisper_data["curious_users"].add(user_display_name)
+                whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
 
             receiver_id_display = escape_markdown(whisper_data["receiver_display_name"])
             code_content = format_block_code(whisper_data)
             new_text = f"{receiver_id_display}\n```{code_content}```"
 
-            reply_target = f"@{whisper_data['sender_username']}" if whisper_data['sender_username'] else str(whisper_data['sender_id'])
+            reply_target = f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])
             reply_text = f"{reply_target} "
             keyboard = {
                 "inline_keyboard": [[
-                    {"text": "👁️ show", "callback_data": f"show|{unique_id}"},
-                    {"text": "🗨️ reply", "switch_inline_query_current_chat": reply_text}
+                    {"text": "👁️ show", "callback_data": f"show_{unique_id}"},
+                    {"text": "🗨️ reply", "switch_inline_query_current_chat": f"{reply_text}"}
                 ]]
             }
 
-            if message:
-                edit_message_text(
-                    chat_id=message["chat"]["id"],
-                    message_id=message["message_id"],
-                    text=new_text,
-                    reply_markup=keyboard
-                )
-            elif inline_message_id:
-                edit_message_text(
-                    inline_message_id=inline_message_id,
-                    text=new_text,
-                    reply_markup=keyboard
-                )
+            try:
+                if message:
+                    edit_message_text(
+                        chat_id=message["chat"]["id"],
+                        message_id=message["message_id"],
+                        text=new_text,
+                        reply_markup=keyboard
+                    )
+                elif inline_message_id:
+                    edit_message_text(
+                        inline_message_id=inline_message_id,
+                        text=new_text,
+                        reply_markup=keyboard
+                    )
 
-            response_text = f"🔐 پیام نجوا:\n{whisper_data['secret_message']} 🎁" if is_allowed else "⚠️ این نجوا برای تو نیست! 😕"
-            answer_callback_query(callback_id, response_text, show_alert=True)
+                response_text = f"🔐 پیام نجوا:\n{whisper_data['secret_message']} 🎁" if is_allowed else "⚠️ این نجوا برای تو نیست!"
+                answer_callback_query(callback_id, response_text, show_alert=True)
+            except Exception as e:
+                logger.error("Error editing message: %s", str(e))
+                answer_callback_query(callback_id, "خطایی رخ داد. دوباره امتحان کن!", True)
