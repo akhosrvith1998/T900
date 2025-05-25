@@ -83,11 +83,11 @@ def edit_message_text(chat_id=None, message_id=None, inline_message_id=None, tex
 
 def format_block_code(whisper_data):
     """Format whisper data for display in code block"""
-    receiver_first_name = whisper_data.get('first_name', 'Unknown')
+    receiver_display_name = whisper_data.get('display_name', 'Unknown')
     view_times = whisper_data.get("receiver_views", [])
     view_count = len(view_times)
     view_time_str = get_irst_time(view_times[-1]) if view_times else "Not yet"
-    code_content = f"{escape_markdown(receiver_first_name)} {view_count} | {view_time_str}\n__________"
+    code_content = f"{escape_markdown(receiver_display_name)} {view_count} | {view_time_str}\n__________"
     curious_users = whisper_data.get("curious_users", [])
     if curious_users:
         code_content += "\nCuriosity\n" + "\n".join([escape_markdown(user.get("name", "Unknown")) for user in sorted(curious_users, key=lambda x: x.get("name", ""))])
