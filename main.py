@@ -3,6 +3,7 @@ import uuid
 import threading
 import time
 import requests
+import os  # اضافه کردن ماژول os
 from utils import escape_markdown, get_irst_time, get_user_profile_photo, answer_inline_query, answer_callback_query, edit_message_text, format_block_code
 from database import load_history, save_history, history
 from cache import get_cached_inline_query, set_cached_inline_query
@@ -110,7 +111,7 @@ def process_update(update):
                         "receiver_display_name": receiver_display_name,
                         "first_name": receiver_first_name,
                         "secret_message": secret_message,
-                        "curious_users": set(),
+                        "curious_users": [],
                         "receiver_views": []
                     }
 
@@ -122,7 +123,7 @@ def process_update(update):
                     reply_text = f"{reply_target} "
                     keyboard = {
                         "inline_keyboard": [[
-                            {"text": "👁️ show", "callback_data": f"show|{unique_id}"},
+                            {"text": "👁️ show", "callback_data": f"show_{unique_id}"},
                             {"text": "🗨️ reply", "switch_inline_query_current_chat": reply_text}
                         ]]
                     }
@@ -155,7 +156,7 @@ def process_update(update):
             receiver_user_id = None
 
             if receiver_id.startswith('@'):
-                receiver_username = receiver_id.lstrip('@')
+                receiver_username = receiver_id.lstrip('@').lower()
             elif receiver_id.isdigit():
                 receiver_user_id = receiver_id  # به صورت رشته نگه می‌داریم
             else:
@@ -180,7 +181,7 @@ def process_update(update):
                     "display_name": receiver_display_name,
                     "first_name": receiver_first_name,
                     "profile_photo_url": profile_photo_url,
-                    "curious_users": set()
+                    "curious_users": []
                 }
                 history[sender_id].append(receiver_data)
                 history[sender_id] = history[sender_id][-10:]
@@ -208,7 +209,7 @@ def process_update(update):
             keyboard = {
                 "inline_keyboard": [[
                     {"text": "👁️ show", "callback_data": f"show_{unique_id}"},
-                    {"text": "🗨️ reply", "switch_inline_query_current_chat": f"{reply_text}"}
+                    {"text": "🗨️ reply", "switch_inline_query_current_chat": reply_text}
                 ]]
             }
 
@@ -237,7 +238,7 @@ def process_update(update):
     elif "callback_query" in update:
         callback = update["callback_query"]
         callback_id = callback["id"]
-        data = callback.get("data")
+        data = callback["data"]
         message = callback.get("message")
         inline_message_id = callback.get("inline_message_id")
 
@@ -246,10 +247,10 @@ def process_update(update):
             whisper_data = whispers.get(unique_id)
 
             if not whisper_data:
-                answer_callback_query(callback_id, "⌛ نجوا منقضی شده! 🗨", True)
+                answer_callback_query(callback_id, "⌛️ نجوا منقضی شده! 🕒", True)
                 return
 
-            user = callback.get("from")
+            user = callback["from"]
             user_id = str(user["id"])
             username = user.get("username", "").lstrip('@').lower() if user.get("username") else None
             first_name = user.get("first_name", "")
@@ -277,7 +278,7 @@ def process_update(update):
             keyboard = {
                 "inline_keyboard": [[
                     {"text": "👁️ show", "callback_data": f"show_{unique_id}"},
-                    {"text": "🗨️ reply", "switch_inline_query_current_chat": f"{reply_text}"}
+                    {"text": "🗨️ reply", "switch_inline_query_current_chat": reply_text}
                 ]]
             }
 
@@ -296,8 +297,8 @@ def process_update(update):
                         reply_markup=keyboard
                     )
 
-                response_text = f"🔐 پیام نجوا:\n{whisper_data['secret_message']} 🎁" if is_allowed else "⚠️ این نجوا برای تو نیست!"
+                response_text = f"🔐 پیام نجوا:\n{whisper_data['secret_message']} 🎁" if is_allowed else "⚠️ این نجوا برای تو نیست! 😕"
                 answer_callback_query(callback_id, response_text, show_alert=True)
             except Exception as e:
                 logger.error("Error editing message: %s", str(e))
-                answer_callback_query(callback_id, "خطایی رخ داد. دوباره امتحان کن!", True)
+                answer_callback_query(callback_id, "خطایی رخ داد. دوباره امتحان کنید!", True)
