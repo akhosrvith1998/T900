@@ -17,7 +17,6 @@ def load_whispers():
     try:
         with open(WHISPERS_FILE, "r") as f:
             data = json.load(f)
-            # تبدیل curious_users به لیست دیکشنری‌ها
             for key, value in data.items():
                 if "curious_users" in value:
                     value["curious_users"] = [user for user in value["curious_users"]]
@@ -90,7 +89,7 @@ def process_update(update):
         }
 
         results = [base_result]
-        # نمایش تاریخچه برای همه حالات
+        # نمایش تاریخچه با به‌روزرسانی عکس پروفایل
         if sender_id in history:
             for receiver in sorted(history[sender_id], key=lambda x: x.get("display_name", "")):
                 receiver_id = receiver.get("receiver_id", "")
@@ -114,14 +113,10 @@ def process_update(update):
                 }
                 results.append(result)
 
-        # پردازش نجوا یا نمایش تاریخچه با چند کلمه
+        # پردازش نجوا یا نمایش تاریخچه
         parts = query_text.split(" ", 1)
-        if not parts[0] or sender_id in history:  # اگه خالی باشه یا تاریخچه داشته باشه
-            if len(parts) > 1:
-                receiver_id = parts[0]
-                secret_message = parts[1].strip()
-            else:
-                secret_message = parts[0].strip() if parts[0] else ""
+        if not parts[0] or (sender_id in history and not any(c.startswith('@') or c.isdigit() for c in parts[0].split())):
+            secret_message = query_text if query_text else ""
             if sender_id in history and secret_message:
                 results = [base_result]
                 for receiver in sorted(history[sender_id], key=lambda x: x.get("display_name", "")):
@@ -161,7 +156,7 @@ def process_update(update):
                     save_whispers(whispers)
 
                     receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                    receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
+                    receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"  # لینک‌دار از ابتدا
                     code_content = format_block_code(whispers[unique_id])
                     public_text = f"{receiver_link}\n```{code_content}```"
 
@@ -247,7 +242,7 @@ def process_update(update):
                 save_whispers(whispers)
 
                 receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
+                receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"  # لینک‌دار از ابتدا
                 code_content = format_block_code(whispers[unique_id])
                 public_text = f"{receiver_link}\n```{code_content}```"
 
@@ -320,7 +315,7 @@ def process_update(update):
             receiver_first_name = whisper_data["first_name"]
             receiver_id = whisper_data["receiver_id"]
             receiver_first_name_escaped = escape_markdown(receiver_first_name)
-            receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"
+            receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"  # لینک‌دار از ابتدا
             code_content = format_block_code(whisper_data)
             new_text = f"{receiver_link}\n```{code_content}```"
 
