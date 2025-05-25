@@ -26,10 +26,10 @@ def get_user_profile_photo(user_id):
                 print(f"Profile photo URL for user_id {user_id}: {file_url}")
                 return file_id, file_url
         print(f"No profile photo found for user_id {user_id}")
-        return None, None
+        return None, "https://via.placeholder.com/150"  # تصویر پیش‌فرض
     except Exception as e:
         print(f"Error fetching profile photo for user_id {user_id}: {e}")
-        return None, None
+        return None, "https://via.placeholder.com/150"
 
 def escape_markdown(text):
     """فرمت کردن متن برای MarkdownV2 با مدیریت کاراکترهای خاص"""
