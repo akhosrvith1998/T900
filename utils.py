@@ -33,12 +33,11 @@ def get_user_profile_photo(user_id):
 
 def escape_markdown(text):
     """فرمت کردن متن برای MarkdownV2 با مدیریت کاراکترهای خاص"""
-    if not text:
+    if not text or not text.strip():
         return "Unknown"
     escape_chars = '_*[]()~`>#+-=|{}.!'
     escaped_text = ''.join(['\\' + char if char in escape_chars else char for char in str(text)])
-    # جلوگیری از خطاهای Markdown با جایگزینی کاراکترهای غیرمجاز
-    return escaped_text if escaped_text else "Unknown"
+    return escaped_text if escaped_text.strip() else "Unknown"
 
 def get_irst_time(timestamp):
     """تبدیل زمان به وقت ایران"""
