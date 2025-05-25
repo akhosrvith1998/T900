@@ -2,6 +2,7 @@ import json
 import uuid
 import threading
 import time
+import requests
 from utils import escape_markdown, get_irst_time, get_user_profile_photo, answer_inline_query, answer_callback_query, edit_message_text, format_block_code
 from database import load_history, save_history, history
 from cache import get_cached_inline_query, set_cached_inline_query
@@ -9,14 +10,19 @@ from logger import logger
 
 whispers = {}
 BOT_USERNAME = "@Bgnabot"
+TOKEN = os.getenv("BOT_TOKEN", "7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc")
+URL = f"https://api.telegram.org/bot{TOKEN}/"
 
 def get_user_first_name(user_id):
     """دریافت نام کاربر از API تلگرام"""
     url = URL + "getChat"
     params = {"chat_id": user_id}
-    resp = requests.get(url, params=params).json()
-    if resp.get("ok"):
-        return resp["result"].get("first_name", "Unknown")
+    try:
+        resp = requests.get(url, params=params).json()
+        if resp.get("ok"):
+            return resp["result"].get("first_name", "Unknown")
+    except Exception as e:
+        logger.error("Error fetching first name for user_id %s: %s", user_id, str(e))
     return "Unknown"
 
 def process_update(update):
@@ -29,7 +35,6 @@ def process_update(update):
         sender = inline_query["from"]
         sender_id = str(sender["id"])
 
-        # چک کردن کش
         cached_results = get_cached_inline_query(sender_id, query_text)
         if cached_results:
             logger.info("Serving cached inline query for %s: %s", sender_id, query_text)
@@ -54,7 +59,6 @@ def process_update(update):
         }
 
         results = [base_result]
-        # نمایش تاریخچه برای کوئری خالی یا کوئری‌های تک‌کلمه‌ای
         if sender_id in history:
             for receiver in sorted(history[sender_id], key=lambda x: x["display_name"]):
                 result = {
@@ -76,7 +80,6 @@ def process_update(update):
 
         try:
             parts = query_text.split(" ", 1)
-            # اگر فقط متن وارد شده باشد، نجوا برای گیرنده از تاریخچه ارسال می‌شود
             if len(parts) == 1 and sender_id in history:
                 secret_message = parts[0].strip()
                 results = [base_result]
@@ -84,12 +87,12 @@ def process_update(update):
                     unique_id = uuid.uuid4().hex
                     receiver_id = receiver['receiver_id']
                     receiver_username = receiver_id.lstrip('@').lower() if receiver_id.startswith('@') else None
-                    receiver_user_id = int(receiver_id) if receiver_id.isdigit() else None
+                    receiver_user_id = str(receiver_id) if receiver_id.isdigit() else None
                     receiver_display_name = receiver['display_name']
                     receiver_first_name = receiver['first_name']
 
-                    profile_photo = get_user_profile_photo(receiver_user_id) if receiver_user_id else None
-                    profile_photo_url = f"https://api.telegram.org/file/bot7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc/{profile_photo}" if profile_photo else ""
+                    profile_photo = get_user_profile_photo(int(receiver_user_id)) if receiver_user_id else None
+                    profile_photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{profile_photo}" if profile_photo else ""
 
                     sender_username = sender.get("username", "").lstrip('@').lower() if sender.get("username") else None
                     sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
@@ -112,7 +115,7 @@ def process_update(update):
 
                     receiver_id_display = escape_markdown(receiver_display_name)
                     code_content = format_block_code(whispers[unique_id])
-                    public_text = f"{receiver_id_display}\n```\\n{code_content}```"  # یوزرنیم/آیدی خارج از بلاک کد
+                    public_text = f"{receiver_id_display}\n```{code_content}```"
 
                     reply_target = f"@{sender_username}" if sender_username else str(sender_id)
                     reply_text = f"{reply_target} "
@@ -139,7 +142,6 @@ def process_update(update):
                 answer_inline_query(query_id, results)
                 return
 
-            # اگر گیرنده و متن وارد شده باشد
             if len(parts) < 2:
                 set_cached_inline_query(sender_id, query_text, results)
                 answer_inline_query(query_id, results)
@@ -154,7 +156,7 @@ def process_update(update):
             if receiver_id.startswith('@'):
                 receiver_username = receiver_id.lstrip('@').lower()
             elif receiver_id.isdigit():
-                receiver_user_id = int(receiver_id)
+                receiver_user_id = receiver_id  # نگه داشتن به صورت رشته
             else:
                 raise ValueError("شناسه گیرنده نامعتبر")
 
@@ -165,8 +167,8 @@ def process_update(update):
 
             receiver_first_name = get_user_first_name(receiver_user_id) if receiver_user_id else receiver_username
 
-            profile_photo = get_user_profile_photo(receiver_user_id) if receiver_user_id else None
-            profile_photo_url = f"https://api.telegram.org/file/bot7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc/{profile_photo}" if profile_photo else ""
+            profile_photo = get_user_profile_photo(int(receiver_user_id)) if receiver_user_id else None
+            profile_photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{profile_photo}" if profile_photo else ""
             existing_receiver = next((r for r in history.get(sender_id, []) if r["receiver_id"] == (receiver_username or str(receiver_user_id))), None)
             if not existing_receiver:
                 if sender_id not in history:
@@ -184,7 +186,7 @@ def process_update(update):
 
             whispers[unique_id] = {
                 "sender_id": sender_id,
-                "sender_username": sender_username,
+                "sender_username": receiver_username,
                 "sender_display_name": sender_display_name,
                 "receiver_username": receiver_username,
                 "receiver_user_id": receiver_user_id,
@@ -197,7 +199,7 @@ def process_update(update):
 
             receiver_id_display = escape_markdown(receiver_display_name)
             code_content = format_block_code(whispers[unique_id])
-            public_text = f"{receiver_id_display}\n```\\n{code_content}```"  # یوزرنیم/آیدی خارج از بلاک کد
+            public_text = f"{receiver_id_display}\n```{code_content}```"
 
             reply_target = f"@{sender_username}" if sender_username else str(sender_id)
             reply_text = f"{reply_target} "
@@ -247,27 +249,25 @@ def process_update(update):
 
             user = callback["from"]
             user_id = str(user["id"])
-            username = user.get("username", "").lstrip('@') if user.get("username") else None
+            username = user.get("username", "").lstrip('@').lower() if user.get("username") else None
             first_name = user.get("first_name", "")
             last_name = user.get("last_name", "")
             user_display_name = f"{first_name} {last_name}".strip() if last_name else first_name
 
             is_allowed = (
                 user_id == whisper_data["sender_id"] or
-                (whisper_data["receiver_username"] and username == whisper_data["receiver_username"]) or
-                (whisper_data["receiver_user_id"] and user_id == str(whisper_data["receiver_user_id"]))
+                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower()) or
+                (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"])
             )
 
             if is_allowed and user_id != whisper_data["sender_id"]:
                 whisper_data["receiver_views"].append(time.time())
-                whisper_data["receiver_display_name"] = f"@{username}" if username else str(user_id)
-
-            if not is_allowed:
+            elif not is_allowed:
                 whisper_data["curious_users"].add(user_display_name)
 
             receiver_id_display = escape_markdown(whisper_data["receiver_display_name"])
             code_content = format_block_code(whisper_data)
-            new_text = f"{receiver_id_display}\n```\\n{code_content}```"  # یوزرنیم/آیدی خارج از بلاک کد
+            new_text = f"{receiver_id_display}\n```{code_content}```"
 
             reply_target = f"@{whisper_data['sender_username']}" if whisper_data['sender_username'] else str(whisper_data['sender_id'])
             reply_text = f"{reply_target} "
