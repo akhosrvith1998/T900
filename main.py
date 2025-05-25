@@ -54,26 +54,24 @@ def get_user_first_name(user_id):
         return "Unknown"
 
 def resolve_user_id(receiver_id, receiver_username=None):
-    """تبدیل یوزرنیم به آیدی عددی یا تأیید آیدی عددی"""
-    if receiver_id.isdigit():
-        return receiver_id
+    """تبدیل یوزرنیم به آیدی عددی با مدیریت خطاهای پیشرفته"""
+    if receiver_id.startswith('@'):
+        receiver_username = receiver_id.lstrip('@')
+        receiver_id = None
+    
     if receiver_username:
         url = URL + "getChat"
         params = {"chat_id": f"@{receiver_username}"}
         try:
             resp = requests.get(url, params=params, timeout=10).json()
             if resp.get("ok"):
-                user_id = str(resp["result"]["id"])
-                print(f"Resolved user_id for @{receiver_username}: {user_id}")
-                return user_id
-            else:
-                logger.warning("User not found for username @%s: %s", receiver_username, resp.get("description", "Unknown error"))
-                return None  # اگه یوزرنیم پیدا نشد، None برگردون
-        except Exception as e:
-            logger.error("Error resolving user_id for username @%s: %s", receiver_username, str(e))
+                return str(resp["result"]["id"])
+            logger.warning("خطا در دریافت آدی کاربر: %s", resp.get("description"))
             return None
-    logger.error("Could not resolve user_id for receiver_id %s", receiver_id)
-    return None
+        except Exception as e:
+            logger.error("خطای شدید در دریافت آدی: %s", str(e))
+            return None
+    return receiver_id if receiver_id.isdigit() else None
 
 def process_update(update):
     """پردازش آپدیت‌های دریافتی از تلگرام"""
@@ -81,224 +79,125 @@ def process_update(update):
 
     if "inline_query" in update:
         inline_query = update["inline_query"]
-        query_id = inline_query["id"]
-        raw_query = inline_query.get("query", "").strip()
-        query_text = raw_query.replace(BOT_USERNAME, "", 1).strip()
-        sender = inline_query["from"]
-        sender_id = str(sender["id"])
+        query_text = inline_query.get("query", "").replace(BOT_USERNAME, "").strip()
 
-        cached_results = get_cached_inline_query(sender_id, query_text)
-        if cached_results:
-            logger.info("Serving cached inline query for %s: %s", sender_id, query_text)
-            answer_inline_query(query_id, cached_results)
-            return
-
-        base_result = {
-            "type": "article",
-            "id": "base",
-            "title": "💡 راهنمای نجوا",
-            "input_message_content": {
-                "message_text": (
-                    "راهنمای نجوا:\n\n"
-                    "روش اول با یوزرنیم گیرنده:\n"
-                    "@Bgnabot @username متن نجوا\n\n"
-                    "روش دوم با آیدی عددی گیرنده:\n"
-                    "@Bgnabot 1234567890 متن نجوا\n\n"
-                    "یا فقط متن نجوا را وارد کنید و از تاریخچه گیرنده انتخاب کنید!"
-                )
-            },
-            "description": "همیشه فعال!",
-            "thumb_url": "https://via.placeholder.com/150"
-        }
-
-        results = [base_result]
-        # نمایش تاریخچه با به‌روزرسانی عکس پروفایل
-        if sender_id in history:
-            for receiver in sorted(history.get(sender_id, []), key=lambda x: x.get("display_name", "")):
-                receiver_id = receiver.get("receiver_id", "")
-                if not receiver_id:
-                    continue
-                receiver_user_id = receiver_id.split('@')[-1] if '@' in receiver_id else receiver_id
-                profile_photo, profile_photo_url = get_user_profile_photo(int(receiver_user_id))
-                if profile_photo_url and profile_photo_url != receiver.get("profile_photo_url"):
-                    receiver["profile_photo_url"] = profile_photo_url
-                    save_history(sender_id, receiver)
-                result = {
+        # پردازش کوئری‌های شامل یوزرنیم
+        if query_text and ('@' in query_text.split()[0] or query_text.split()[0].isdigit()):
+            parts = query_text.split(maxsplit=1)
+            if len(parts) < 2:
+                return
+            
+            target = parts[0]
+            secret_message = parts[1]
+            
+            # حل مشکل یوزرنیم‌ها
+            actual_receiver_id = resolve_user_id(target)
+            if not actual_receiver_id:
+                answer_inline_query(inline_query["id"], [{
                     "type": "article",
-                    "id": f"history_{receiver_id}",
-                    "title": f"نجوا به {receiver.get('display_name', 'Unknown')} ✨",
-                    "input_message_content": {
-                        "message_text": f"📩 پیام خود را برای {receiver.get('display_name', 'Unknown')} وارد کنید"
-                    },
-                    "description": f"ارسال نجوا به {receiver.get('first_name', 'Unknown')}",
-                    "thumb_url": receiver.get("profile_photo_url", "https://via.placeholder.com/150")
-                }
-                results.append(result)
+                    "id": "error",
+                    "title": "❌ کاربر یافت نشد!",
+                    "input_message_content": {"message_text": "خطا: کاربر مورد نظر وجود ندارد!"}
+                }])
+                return
+            
+            # دریافت اطلاعات کاربر با جزییات کامل
+            try:
+                chat_info = requests.get(URL + "getChat", params={"chat_id": actual_receiver_id}).json()
+                receiver_first_name = chat_info.get("result", {}).get("first_name", "ناشناس")
+                receiver_username = chat_info.get("result", {}).get("username", "")
+            except:
+                receiver_first_name = "ناشناس"
+                receiver_username = ""
 
-        # پردازش نجوا یا نمایش تاریخچه
-        if query_text:
-            parts = query_text.split(" ", 1)
-            if len(parts) == 1 and sender_id in history:  # حالت تاریخچه
-                secret_message = parts[0].strip()
-                results = [base_result]
-                for receiver in sorted(history.get(sender_id, []), key=lambda x: x.get("display_name", "")):
+            # ساخت لینک صحیح با نام واقعی
+            receiver_link = f"[{escape_markdown(receiver_first_name)}](tg://user?id={actual_receiver_id})"
+            
+            # تولید محتوای پیام
+            code_content = f"{receiver_first_name} 0 | هنوز باز نشده\n___________\nNothing"
+            public_text = f"{receiver_link}\n```\n{code_content}\n```"
+
+            # ساخت کیبورد تعاملی
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "👁️ مشاهده", "callback_data": f"show_{uuid.uuid4().hex}"},
+                        {"text": "🗨️ پاسخ", "switch_inline_query_current_chat": f"@{inline_query['from']['username']}" if inline_query['from'].get('username') else ""}
+                    ]
+                ]
+            }
+
+            # ثبت در تاریخچه با عکس پروفایل
+            profile_photo, photo_url = get_user_profile_photo(int(actual_receiver_id))
+            history_entry = {
+                "receiver_id": actual_receiver_id,
+                "display_name": receiver_first_name,
+                "profile_photo_url": photo_url,
+                "last_used": time.time()
+            }
+            save_history(inline_query['from']['id'], history_entry)
+
+            # ارسال نتیجه با تامبنیل
+            answer_inline_query(inline_query["id"], [{
+                "type": "article",
+                "id": actual_receiver_id,
+                "title": f"🔐 نجوا به {receiver_first_name}",
+                "description": f"ارسال پیام محرمانه به {receiver_first_name}",
+                "thumb_url": photo_url,
+                "input_message_content": {
+                    "message_text": public_text,
+                    "parse_mode": "MarkdownV2"
+                },
+                "reply_markup": keyboard
+            }])
+
+        else:
+            # نمایش تاریخچه در صورت عدم وجود کوئری یا ورودی ناقص
+            sender_id = str(inline_query["from"]["id"])
+            results = [
+                {
+                    "type": "article",
+                    "id": "base",
+                    "title": "💡 راهنمای نجوا",
+                    "input_message_content": {
+                        "message_text": (
+                            "راهنمای نجوا:\n\n"
+                            "روش اول با یوزرنیم گیرنده:\n"
+                            "@Bgnabot @username متن نجوا\n\n"
+                            "روش دوم با آیدی عددی گیرنده:\n"
+                            "@Bgnabot 1234567890 متن نجوا\n\n"
+                            "یا فقط متن نجوا را وارد کنید و از تاریخچه گیرنده انتخاب کنید!"
+                        )
+                    },
+                    "description": "همیشه فعال!",
+                    "thumb_url": "https://via.placeholder.com/150"
+                }
+            ]
+
+            if sender_id in history:
+                for receiver in sorted(history[sender_id], key=lambda x: x.get("display_name", "")):
                     receiver_id = receiver.get("receiver_id", "")
                     if not receiver_id:
                         continue
-                    receiver_username = receiver_id.lstrip('@').lower() if receiver_id.startswith('@') else None
-                    receiver_user_id = receiver_id if receiver_id.isdigit() else None
-                    receiver_first_name = receiver.get("first_name", "Unknown")
-
-                    profile_photo, profile_photo_url = get_user_profile_photo(int(receiver_user_id)) if receiver_user_id else (None, None)
-
-                    unique_id = uuid.uuid4().hex
-                    whispers[unique_id] = {
-                        "sender_id": sender_id,
-                        "receiver_username": receiver_username,
-                        "receiver_user_id": receiver_user_id,
-                        "receiver_id": receiver_id,
-                        "first_name": receiver_first_name,
-                        "secret_message": secret_message,
-                        "curious_users": [],
-                        "receiver_views": [],
-                        "created_at": time.time()
-                    }
-                    save_whispers(whispers)
-
-                    receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                    # 🟢 اصلاح لینک تاریخچه برای استفاده از آیدی
-                    receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={receiver_user_id})" if receiver_user_id else f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})"
-                    code_content = format_block_code(whispers[unique_id])
-                    public_text = f"{receiver_link}\n```\n{code_content}\n```"
-
-                    reply_target = f"@{sender.get('username', '').lstrip('@')}" if sender.get("username") else str(sender_id)
-                    reply_text = f"{reply_target} "
-                    keyboard = {
-                        "inline_keyboard": [
-                            [
-                                {"text": "👁️ Show", "callback_data": f"show_{unique_id}"},
-                                {"text": "🗨️ Reply", "switch_inline_query_current_chat": reply_text}
-                            ],
-                            [
-                                {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
-                            ]
-                        ]
-                    }
-
-                    # 🟢 تغییر گزینه‌های تاریخچه برای ارسال نجوا
-                    results.append({
+                    receiver_user_id = receiver_id.split('@')[-1] if '@' in receiver_id else receiver_id
+                    profile_photo, profile_photo_url = get_user_profile_photo(int(receiver_user_id))
+                    if profile_photo_url and profile_photo_url != receiver.get("profile_photo_url"):
+                        receiver["profile_photo_url"] = profile_photo_url
+                        save_history(sender_id, receiver)
+                    result = {
                         "type": "article",
-                        "id": unique_id,
-                        "title": f"🔒 نجوا به {receiver_first_name} 🎉",
+                        "id": f"history_{receiver_id}",
+                        "title": f"نجوا به {receiver.get('display_name', 'Unknown')} ✨",
                         "input_message_content": {
-                            "message_text": public_text,  # پیام نجوا به جای پیام قبلی
-                            "parse_mode": "MarkdownV2"
+                            "message_text": f"📩 پیام خود را برای {receiver.get('display_name', 'Unknown')} وارد کنید"
                         },
-                        "reply_markup": keyboard,
-                        "description": f"پیام: {secret_message[:15]}...",
-                        "thumb_url": profile_photo_url if profile_photo_url else "https://via.placeholder.com/150"
-                    })
-                set_cached_inline_query(sender_id, query_text, results)
-                answer_inline_query(query_id, results)
-            elif len(parts) >= 2:
-                receiver_id = parts[0].strip()
-                secret_message = parts[1].strip()
-
-                receiver_username = None
-                receiver_user_id = None
-                if receiver_id.startswith('@'):
-                    receiver_username = receiver_id.lstrip('@').lower()
-                elif receiver_id.isdigit():
-                    receiver_user_id = receiver_id
-                else:
-                    logger.error("Invalid receiver_id format: %s", receiver_id)
-                    set_cached_inline_query(sender_id, query_text, [base_result])
-                    answer_inline_query(query_id, [base_result])
-                    return
-
-                actual_receiver_id = resolve_user_id(receiver_id, receiver_username)
-                if not actual_receiver_id:
-                    receiver_first_name = "کاربر ناشناس"
-                else:
-                    receiver_first_name = get_user_first_name(actual_receiver_id)
-
-                profile_photo, profile_photo_url = get_user_profile_photo(int(actual_receiver_id)) if actual_receiver_id != "0" else (None, None)
-
-                existing_receiver = next((r for r in history.get(sender_id, []) if r.get("receiver_id") == (f"@{receiver_username}" if receiver_username else str(actual_receiver_id))), None)
-                if not existing_receiver:
-                    if sender_id not in history:
-                        history[sender_id] = []
-                    receiver_data = {
-                        "receiver_id": f"@{receiver_username}" if receiver_username else str(actual_receiver_id),
-                        "display_name": receiver_first_name,
-                        "first_name": receiver_first_name,
-                        "profile_photo_url": profile_photo_url if profile_photo_url else "",
-                        "curious_users": []
+                        "description": f"ارسال نجوا به {receiver.get('first_name', 'Unknown')}",
+                        "thumb_url": receiver.get("profile_photo_url", "https://via.placeholder.com/150")
                     }
-                    history[sender_id].append(receiver_data)
-                    history[sender_id] = history[sender_id][-10:]
-                    save_history(sender_id, receiver_data)
+                    results.append(result)
 
-                unique_id = uuid.uuid4().hex
-                sender_username = sender.get("username", "").lstrip('@').lower() if sender.get("username") else None
-                sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
-
-                whispers[unique_id] = {
-                    "sender_id": sender_id,
-                    "sender_username": sender_username,
-                    "sender_display_name": sender_display_name,
-                    "receiver_username": receiver_username,
-                    "receiver_user_id": actual_receiver_id,
-                    "receiver_id": actual_receiver_id,
-                    "receiver_display_name": receiver_first_name,
-                    "first_name": receiver_first_name,
-                    "secret_message": secret_message,
-                    "curious_users": [],
-                    "receiver_views": [],
-                    "created_at": time.time()
-                }
-                save_whispers(whispers)
-
-                receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
-                code_content = format_block_code(whispers[unique_id])
-                public_text = f"{receiver_link}\n```\n{code_content}\n```"
-
-                reply_target = f"@{sender_username}" if sender_username else str(sender_id)
-                reply_text = f"{reply_target} "
-                keyboard = {
-                    "inline_keyboard": [
-                        [
-                            {"text": "👁️ Show", "callback_data": f"show_{unique_id}"},
-                            {"text": "🗨️ Reply", "switch_inline_query_current_chat": reply_text}
-                        ],
-                        [
-                            {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
-                        ]
-                    ]
-                }
-
-                results.append({
-                    "type": "article",
-                    "id": unique_id,
-                    "title": f"🔒 نجوا به {receiver_first_name} 🎉",
-                    "input_message_content": {
-                        "message_text": public_text,
-                        "parse_mode": "MarkdownV2"
-                    },
-                    "reply_markup": keyboard,
-                    "description": f"پیام: {secret_message[:15]}...",
-                    "thumb_url": profile_photo_url if profile_photo_url else "https://via.placeholder.com/150"
-                })
-
-                set_cached_inline_query(sender_id, query_text, results)
-                answer_inline_query(query_id, results)
-            else:
-                set_cached_inline_query(sender_id, query_text, results)
-                answer_inline_query(query_id, results)
-        else:
             set_cached_inline_query(sender_id, query_text, results)
-            answer_inline_query(query_id, results)
+            answer_inline_query(inline_query["id"], results)
 
     elif "callback_query" in update:
         callback = update["callback_query"]
