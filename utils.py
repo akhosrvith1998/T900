@@ -82,7 +82,7 @@ def format_block_code(whisper_data):
     code_content = f"{escape_markdown(receiver_first_name)} {view_count} | {view_time_str}\n___________"
     curious_users = whisper_data.get("curious_users", set())
     if curious_users:
-        code_content += "\nCurious\n" + "\n".join([escape_markdown(user) for user in sorted(curious_users)])
+        code_content += "\nCurious\n" + "\n".join([escape_markdown(user.get("name", "Unknown")) for user in sorted(curious_users, key=lambda x: x.get("name", ""))])
     else:
         code_content += "\nNothing"
     return code_content
