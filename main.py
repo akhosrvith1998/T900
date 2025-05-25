@@ -1,6 +1,7 @@
 import json
 import uuid
 import threading
+import time
 from utils import escape_markdown, get_irst_time, get_user_profile_photo, answer_inline_query, answer_callback_query, edit_message_text, format_block_code
 from database import load_history, save_history, history
 from cache import get_cached_inline_query, set_cached_inline_query
@@ -8,6 +9,15 @@ from logger import logger
 
 whispers = {}
 BOT_USERNAME = "@Bgnabot"
+
+def get_user_first_name(user_id):
+    """دریافت نام کاربر از API تلگرام"""
+    url = URL + "getChat"
+    params = {"chat_id": user_id}
+    resp = requests.get(url, params=params).json()
+    if resp.get("ok"):
+        return resp["result"].get("first_name", "Unknown")
+    return "Unknown"
 
 def process_update(update):
     """پردازش آپدیت‌های دریافتی از تلگرام"""
@@ -76,6 +86,7 @@ def process_update(update):
                     receiver_username = receiver_id.lstrip('@').lower() if receiver_id.startswith('@') else None
                     receiver_user_id = int(receiver_id) if receiver_id.isdigit() else None
                     receiver_display_name = receiver['display_name']
+                    receiver_first_name = receiver['first_name']
 
                     profile_photo = get_user_profile_photo(receiver_user_id) if receiver_user_id else None
                     profile_photo_url = f"https://api.telegram.org/file/bot7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc/{profile_photo}" if profile_photo else ""
@@ -83,7 +94,6 @@ def process_update(update):
                     sender_username = sender.get("username", "").lstrip('@').lower() if sender.get("username") else None
                     sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
 
-                    # به‌روزرسانی profile_photo_url در تاریخچه
                     receiver["profile_photo_url"] = profile_photo_url
                     save_history(sender_id, receiver)
 
@@ -94,6 +104,7 @@ def process_update(update):
                         "receiver_username": receiver_username,
                         "receiver_user_id": receiver_user_id,
                         "receiver_display_name": receiver_display_name,
+                        "first_name": receiver_first_name,
                         "secret_message": secret_message,
                         "curious_users": set(),
                         "receiver_views": []
@@ -101,7 +112,8 @@ def process_update(update):
 
                     receiver_id_display = escape_markdown(receiver_display_name)
                     code_content = format_block_code(whispers[unique_id])
-                    public_text = f"{receiver_id_display}\n\n```{code_content}```"
+                    public_text = f"{receiver_id_display}\n```\\n{code_content}```"  # یوزرنیم/آیدی خارج از بلاک کد
+
                     reply_target = f"@{sender_username}" if sender_username else str(sender_id)
                     reply_text = f"{reply_target} "
                     keyboard = {
@@ -151,6 +163,8 @@ def process_update(update):
             sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
             receiver_display_name = f"@{receiver_username}" if receiver_username else str(receiver_user_id)
 
+            receiver_first_name = get_user_first_name(receiver_user_id) if receiver_user_id else receiver_username
+
             profile_photo = get_user_profile_photo(receiver_user_id) if receiver_user_id else None
             profile_photo_url = f"https://api.telegram.org/file/bot7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc/{profile_photo}" if profile_photo else ""
             existing_receiver = next((r for r in history.get(sender_id, []) if r["receiver_id"] == (receiver_username or str(receiver_user_id))), None)
@@ -160,7 +174,7 @@ def process_update(update):
                 receiver_data = {
                     "receiver_id": receiver_username or str(receiver_user_id),
                     "display_name": receiver_display_name,
-                    "first_name": sender.get("first_name", ""),
+                    "first_name": receiver_first_name,
                     "profile_photo_url": profile_photo_url,
                     "curious_users": set()
                 }
@@ -175,6 +189,7 @@ def process_update(update):
                 "receiver_username": receiver_username,
                 "receiver_user_id": receiver_user_id,
                 "receiver_display_name": receiver_display_name,
+                "first_name": receiver_first_name,
                 "secret_message": secret_message,
                 "curious_users": set(),
                 "receiver_views": []
@@ -182,7 +197,8 @@ def process_update(update):
 
             receiver_id_display = escape_markdown(receiver_display_name)
             code_content = format_block_code(whispers[unique_id])
-            public_text = f"{receiver_id_display}\n\n```{code_content}```"
+            public_text = f"{receiver_id_display}\n```\\n{code_content}```"  # یوزرنیم/آیدی خارج از بلاک کد
+
             reply_target = f"@{sender_username}" if sender_username else str(sender_id)
             reply_text = f"{reply_target} "
             keyboard = {
@@ -231,14 +247,14 @@ def process_update(update):
 
             user = callback["from"]
             user_id = str(user["id"])
-            username = user.get("username", "").lstrip('@').lower() if user.get("username") else None
+            username = user.get("username", "").lstrip('@') if user.get("username") else None
             first_name = user.get("first_name", "")
             last_name = user.get("last_name", "")
             user_display_name = f"{first_name} {last_name}".strip() if last_name else first_name
 
             is_allowed = (
                 user_id == whisper_data["sender_id"] or
-                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower()) or
+                (whisper_data["receiver_username"] and username == whisper_data["receiver_username"]) or
                 (whisper_data["receiver_user_id"] and user_id == str(whisper_data["receiver_user_id"]))
             )
 
@@ -251,7 +267,7 @@ def process_update(update):
 
             receiver_id_display = escape_markdown(whisper_data["receiver_display_name"])
             code_content = format_block_code(whisper_data)
-            new_text = f"{receiver_id_display}\n\n```{code_content}```"
+            new_text = f"{receiver_id_display}\n```\\n{code_content}```"  # یوزرنیم/آیدی خارج از بلاک کد
 
             reply_target = f"@{whisper_data['sender_username']}" if whisper_data['sender_username'] else str(whisper_data['sender_id'])
             reply_text = f"{reply_target} "
