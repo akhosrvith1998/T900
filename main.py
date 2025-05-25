@@ -1,6 +1,5 @@
 import json
 import uuid
-import threading
 import time
 import requests
 import os
@@ -9,10 +8,8 @@ from database import load_history, save_history, history
 from cache import get_cached_inline_query, set_cached_inline_query
 from logger import logger
 
-# File for persistent whispers storage
 WHISPERS_FILE = "whispers.json"
 
-# Load whispers from file
 def load_whispers():
     try:
         with open(WHISPERS_FILE, "r") as f:
@@ -27,7 +24,6 @@ def load_whispers():
         logger.error("Error loading whispers: %s", str(e))
         return {}
 
-# Save whispers to file
 def save_whispers(whispers_data):
     try:
         with open(WHISPERS_FILE, "w") as f:
@@ -40,12 +36,15 @@ BOT_USERNAME = "@Bgnabot"
 TOKEN = os.getenv("BOT_TOKEN", "7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc")
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 
-def resolve_user_id(receiver_id):
-    """Convert username/ID to numeric ID"""
+def resolve_user_id(receiver_id, sender_id=None, sender_username=None):
+    """Resolve username/ID to numeric ID"""
     if receiver_id.startswith('@'):
-        username = receiver_id.lstrip('@')
+        username = receiver_id.lstrip('@').lower()
+        if sender_username and username == sender_username.lstrip('@').lower():
+            logger.info("Username @%s matches sender's username, using sender_id %s", username, sender_id)
+            return str(sender_id)
         try:
-            resp = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=5).json()
+            resp = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=10).json()
             if resp.get('ok'):
                 user_id = str(resp['result']['id'])
                 logger.info("Resolved username @%s to ID %s", username, user_id)
@@ -57,7 +56,7 @@ def resolve_user_id(receiver_id):
             logger.error("Error resolving username @%s: %s", username, str(e))
             return None
     elif receiver_id.isdigit():
-        logger.info("Using numeric ID: %s", receiver_id)
+        logger.info("Using numeric ID: %s", receiver dru_id)
         return receiver_id
     logger.error("Invalid receiver ID format: %s", receiver_id)
     return None
@@ -70,22 +69,20 @@ def process_update(update):
         inline_query = update["inline_query"]
         query = inline_query.get("query", "").strip()
         sender_id = str(inline_query['from']['id'])
+        sender_username = inline_query['from'].get('username', '')
 
-        # Remove bot username if present
         if query.startswith(BOT_USERNAME):
             query = query[len(BOT_USERNAME):].strip()
         
         logger.info("Processing inline query from %s: '%s'", sender_id, query)
 
-        # Process queries
         if query:
-            # Split query into target and message
             parts = query.split(maxsplit=1)
-            if len(parts) >= 1:  # At least target is provided
+            if len(parts) >= 1:
                 target = parts[0]
                 secret_message = parts[1] if len(parts) > 1 else ""
                 
-                receiver_id = resolve_user_id(target)
+                receiver_id = resolve_user_id(target, sender_id, sender_username)
                 
                 if not receiver_id:
                     logger.warning("Invalid user ID or username: %s", target)
@@ -93,13 +90,12 @@ def process_update(update):
                         "type": "article",
                         "id": "error",
                         "title": "❌ User not found!",
-                        "input_message_content": {"message_text": "Error: Invalid user ID or username!"}
+                        "input_message_content": {"message_text": "Error: Username not found, user may not exist, or bot is blocked!"}
                     }])
                     return
                 
-                # Get user info
                 try:
-                    user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=5).json()
+                    user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
                     if not user_info.get('ok'):
                         logger.error("Failed to get user info for %s: %s", receiver_id, user_info.get('description', 'Unknown error'))
                         answer_inline_query(inline_query["id"], [{
@@ -124,12 +120,10 @@ def process_update(update):
                     }])
                     return
 
-                # Create message content (profile name with link)
                 message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})"
                 code_content = f"{display_name} 0 | Not yet\n__________\nNothing"
                 public_text = f"{message_text}\n```\n{code_content}\n```"
 
-                # Create interactive buttons
                 unique_id = uuid.uuid4().hex
                 markup = {
                     "inline_keyboard": [
@@ -143,7 +137,6 @@ def process_update(update):
                     ]
                 }
 
-                # Store whisper data if there's a message
                 if secret_message:
                     whispers[unique_id] = {
                         "sender_id": str(inline_query["from"]["id"]),
@@ -159,7 +152,6 @@ def process_update(update):
                     }
                     save_whispers(whispers)
 
-                    # Get and store profile photo
                     _, photo_url = get_user_profile_photo(int(receiver_id))
                     history_entry = {
                         "receiver_id": receiver_id,
@@ -170,11 +162,11 @@ def process_update(update):
                     }
                     try:
                         save_history(inline_query['from']['id'], history_entry)
+                        load_history()  # دوباره لود کن تا مطمئن بشیم آپدیت شده
                         logger.info("Saved history for sender %s, receiver %s", sender_id, receiver_id)
                     except Exception as e:
                         logger.error("Error saving history: %s", str(e))
 
-                    # Send result
                     answer_inline_query(inline_query["id"], [{
                         "type": "article",
                         "id": receiver_id,
@@ -189,7 +181,6 @@ def process_update(update):
                     }])
                     return
 
-        # Show history and help
         results = [{
             "type": "article",
             "id": "help",
@@ -200,12 +191,10 @@ def process_update(update):
             "thumb_url": "https://via.placeholder.com/150"
         }]
         
-        # Load and display history
         try:
             logger.info("Loading history for sender %s: %s", sender_id, history.get(sender_id, []))
             if sender_id in history:
                 for item in history[sender_id]:
-                    # Get updated profile photo
                     _, photo = get_user_profile_photo(int(item['receiver_id']))
                     results.append({
                         "type": "article",
@@ -256,12 +245,10 @@ def process_update(update):
                 whisper_data["receiver_views"].append(time.time())
                 save_whispers(whispers)
             elif not is_allowed:
-                # Check if user is already in curious_users
                 if not any(user['id'] == user_id for user in whisper_data["curious_users"]):
                     whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
                     save_whispers(whispers)
 
-            # Show profile name with link
             receiver_display_name = whisper_data["display_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
             message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})"
@@ -308,10 +295,15 @@ def process_update(update):
             whisper_data = whispers.get(unique_id)
 
             if not whisper_data:
-                answer_callback_query(callback_id, "⌛ Whisper expired!", True)
+                answer_callback_query(callback_id, "⌛ Whisper expired! 🕒", True)
                 return
 
             user = callback["from"]
             user_id = str(user["id"])
-            response_text = f"🔐 Secret Room:\n{whisper_data['secret_message']}\nOnly the sender can see this!" if user_id == whisper_data["sender_id"] else "⚠️ Only the sender can access the Secret Room! 😈"
+            is_allowed = user_id == whisper_data["sender_id"]
+
+            if is_allowed:
+                response_text = f"🔐 Secret Room:\n{whisper_data['secret_message']} 🎁\nOnly the sender can see this!"
+            else:
+                response_text = "⚠️ Only the sender can access the Secret Room! 😈"
             answer_callback_query(callback_id, response_text, True)
