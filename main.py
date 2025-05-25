@@ -3,7 +3,7 @@ import uuid
 import threading
 import time
 import requests
-import os  # اضافه کردن ماژول os
+import os
 from utils import escape_markdown, get_irst_time, get_user_profile_photo, answer_inline_query, answer_callback_query, edit_message_text, format_block_code
 from database import load_history, save_history, history
 from cache import get_cached_inline_query, set_cached_inline_query
@@ -102,12 +102,16 @@ def process_update(update):
                     receiver["profile_photo_url"] = profile_photo_url
                     save_history(sender_id, receiver)
 
+                    # ذخیره آیدی عددی گیرنده برای ساخت لینک
+                    actual_receiver_id = receiver_user_id if receiver_user_id else receiver_id.lstrip('@')
+
                     whispers[unique_id] = {
                         "sender_id": sender_id,
                         "sender_username": sender_username,
                         "sender_display_name": sender_display_name,
-                        "receiver_username": receiver_username,
+                        "receiver_username": receiver_username.lower() if receiver_username else None,
                         "receiver_user_id": receiver_user_id,
+                        "receiver_id": actual_receiver_id,  # آیدی عددی برای لینک
                         "receiver_display_name": receiver_display_name,
                         "first_name": receiver_first_name,
                         "secret_message": secret_message,
@@ -115,9 +119,11 @@ def process_update(update):
                         "receiver_views": []
                     }
 
-                    receiver_id_display = escape_markdown(receiver_display_name)
+                    # نمایش نام نمایشی به‌صورت لینک‌دار
+                    receiver_first_name_escaped = escape_markdown(receiver_first_name)
+                    receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
                     code_content = format_block_code(whispers[unique_id])
-                    public_text = f"{receiver_id_display}\n```{code_content}```"
+                    public_text = f"{receiver_link}\n```{code_content}```"
 
                     reply_target = f"@{sender_username}" if sender_username else str(sender_id)
                     reply_text = f"{reply_target} "
@@ -131,7 +137,7 @@ def process_update(update):
                     results.append({
                         "type": "article",
                         "id": unique_id,
-                        "title": f"🔒 نجوا به {receiver_display_name} 🎉",
+                        "title": f"🔒 نجوا به {receiver_first_name} 🎉",
                         "input_message_content": {
                             "message_text": public_text,
                             "parse_mode": "MarkdownV2"
@@ -156,9 +162,9 @@ def process_update(update):
             receiver_user_id = None
 
             if receiver_id.startswith('@'):
-                receiver_username = receiver_id.lstrip('@').lower()
+                receiver_username = receiver_id.lstrip('@')
             elif receiver_id.isdigit():
-                receiver_user_id = receiver_id  # به صورت رشته نگه می‌داریم
+                receiver_user_id = receiver_id
             else:
                 raise ValueError("شناسه گیرنده نامعتبر")
 
@@ -171,6 +177,9 @@ def process_update(update):
 
             profile_photo = get_user_profile_photo(int(receiver_user_id)) if receiver_user_id else None
             profile_photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{profile_photo}" if profile_photo else ""
+
+            # ذخیره آیدی عددی گیرنده برای ساخت لینک
+            actual_receiver_id = receiver_user_id if receiver_user_id else receiver_id.lstrip('@')
 
             existing_receiver = next((r for r in history.get(sender_id, []) if r["receiver_id"] == (f"@{receiver_username}" if receiver_username else str(receiver_user_id))), None)
             if not existing_receiver:
@@ -191,8 +200,9 @@ def process_update(update):
                 "sender_id": sender_id,
                 "sender_username": sender_username,
                 "sender_display_name": sender_display_name,
-                "receiver_username": receiver_username,
+                "receiver_username": receiver_username.lower() if receiver_username else None,
                 "receiver_user_id": receiver_user_id,
+                "receiver_id": actual_receiver_id,  # آیدی عددی برای لینک
                 "receiver_display_name": receiver_display_name,
                 "first_name": receiver_first_name,
                 "secret_message": secret_message,
@@ -200,9 +210,11 @@ def process_update(update):
                 "receiver_views": []
             }
 
-            receiver_id_display = escape_markdown(receiver_display_name)
+            # نمایش نام نمایشی به‌صورت لینک‌دار
+            receiver_first_name_escaped = escape_markdown(receiver_first_name)
+            receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
             code_content = format_block_code(whispers[unique_id])
-            public_text = f"{receiver_id_display}\n```{code_content}```"
+            public_text = f"{receiver_link}\n```{code_content}```"
 
             reply_target = f"@{sender_username}" if sender_username else str(sender_id)
             reply_text = f"{reply_target} "
@@ -217,7 +229,7 @@ def process_update(update):
                 {
                     "type": "article",
                     "id": unique_id,
-                    "title": f"🔒 نجوا به {receiver_display_name} 🎉",
+                    "title": f"🔒 نجوا به {receiver_first_name} 🎉",
                     "input_message_content": {
                         "message_text": public_text,
                         "parse_mode": "MarkdownV2"
@@ -260,7 +272,7 @@ def process_update(update):
             # شرط دقیق برای شناسایی گیرنده
             is_allowed = (
                 user_id == whisper_data["sender_id"] or
-                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower()) or
+                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"]) or
                 (whisper_data["receiver_user_id"] and user_id == str(whisper_data["receiver_user_id"]))
             )
 
@@ -269,9 +281,13 @@ def process_update(update):
             elif not is_allowed:
                 whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
 
-            receiver_id_display = escape_markdown(whisper_data["receiver_display_name"])
+            # نمایش نام نمایشی به‌صورت لینک‌دار
+            receiver_first_name = whisper_data["first_name"]
+            receiver_id = whisper_data["receiver_id"]
+            receiver_first_name_escaped = escape_markdown(receiver_first_name)
+            receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"
             code_content = format_block_code(whisper_data)
-            new_text = f"{receiver_id_display}\n```{code_content}```"
+            new_text = f"{receiver_link}\n```{code_content}```"
 
             reply_target = f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])
             reply_text = f"{reply_target} "
