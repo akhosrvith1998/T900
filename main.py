@@ -36,7 +36,8 @@ def process_update(update):
                     "روش اول با یوزرنیم گیرنده:\n"
                     "@Bgnabot @username متن نجوا\n\n"
                     "روش دوم با آیدی عددی گیرنده:\n"
-                    "@Bgnabot 1234567890 متن نجوا"
+                    "@Bgnabot 1234567890 متن نجوا\n\n"
+                    "یا فقط متن نجوا را وارد کنید و از تاریخچه گیرنده انتخاب کنید!"
                 )
             },
             "description": "همیشه فعال!"
@@ -55,11 +56,6 @@ def process_update(update):
                         },
                         "description": f"ارسال نجوا به {receiver['first_name']}",
                         "thumb_url": receiver.get("profile_photo_url", ""),
-                        "reply_markup": {
-                            "inline_keyboard": [[
-                                {"text": "ارسال نجوا 🚀", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver['receiver_id']} "}
-                            ]]
-                        }
                     })
             set_cached_inline_query(sender_id, query_text, results)
             answer_inline_query(query_id, results)
@@ -67,6 +63,63 @@ def process_update(update):
 
         try:
             parts = query_text.split(" ", 1)
+            # اگر فقط متن وارد شده باشد و گیرنده از تاریخچه انتخاب شود
+            if len(parts) == 1 and sender_id in history:
+                secret_message = parts[0].strip()
+                results = [base_result]
+                for receiver in sorted(history[sender_id], key=lambda x: x["display_name"]):
+                    unique_id = uuid.uuid4().hex
+                    receiver_id = receiver['receiver_id']
+                    receiver_username = receiver_id.lstrip('@').lower() if receiver_id.startswith('@') else None
+                    receiver_user_id = int(receiver_id) if receiver_id.isdigit() else None
+                    receiver_display_name = receiver['display_name']
+
+                    profile_photo = get_user_profile_photo(receiver_user_id) if receiver_user_id else None
+                    profile_photo_url = f"https://api.telegram.org/file/bot7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc/{profile_photo}" if profile_photo else ""
+
+                    sender_username = sender.get("username", "").lstrip('@').lower() if sender.get("username") else None
+                    sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
+
+                    whispers[unique_id] = {
+                        "sender_id": sender_id,
+                        "sender_username": sender_username,
+                        "sender_display_name": sender_display_name,
+                        "receiver_username": receiver_username,
+                        "receiver_user_id": receiver_user_id,
+                        "receiver_display_name": receiver_display_name,
+                        "secret_message": secret_message,
+                        "curious_users": set(),
+                        "receiver_views": []
+                    }
+
+                    receiver_id_display = escape_markdown(receiver_display_name)
+                    code_content = format_block_code(whispers[unique_id]).replace("هنوز دیده نشده", "Don't see.")
+                    public_text = f"{receiver_id_display}\n\n```{code_content}```"
+                    reply_target = f"@{sender_username}" if sender_username else str(sender_id)
+                    reply_text = f"{reply_target} "
+                    keyboard = {
+                        "inline_keyboard": [[
+                            {"text": "👁️ show", "callback_data": f"show|{unique_id}"},
+                            {"text": "🗨️ reply", "switch_inline_query_current_chat": reply_text}
+                        ]]
+                    }
+
+                    results.append({
+                        "type": "article",
+                        "id": unique_id,
+                        "title": f"🔒 نجوا به {receiver_display_name} 🎉",
+                        "input_message_content": {
+                            "message_text": public_text,
+                            "parse_mode": "MarkdownV2"
+                        },
+                        "reply_markup": keyboard,
+                        "description": f"پیام: {secret_message[:15]}..."
+                    })
+                set_cached_inline_query(sender_id, query_text, results)
+                answer_inline_query(query_id, results)
+                return
+
+            # اگر فقط بخشی از نام گیرنده وارد شده باشد
             if len(parts) < 2:
                 results = [base_result]
                 if sender_id in history:
@@ -81,11 +134,6 @@ def process_update(update):
                                 },
                                 "description": f"ارسال نجوا به {receiver['first_name']}",
                                 "thumb_url": receiver.get("profile_photo_url", ""),
-                                "reply_markup": {
-                                    "inline_keyboard": [[
-                                        {"text": "ارسال نجوا 🚀", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver['receiver_id']} "}
-                                    ]]
-                                }
                             })
                 set_cached_inline_query(sender_id, query_text, results)
                 answer_inline_query(query_id, results)
@@ -139,8 +187,8 @@ def process_update(update):
             }
 
             receiver_id_display = escape_markdown(receiver_display_name)
-            code_content = format_block_code(whispers[unique_id]).replace("هنوز دیده نشده", "Unopened")
-            public_text = f"{receiver_id_display}\n\n"
+            code_content = format_block_code(whispers[unique_id]).replace("هنوز دیده نشده", "Don't see.")
+            public_text = f"{receiver_id_display}\n\n```{code_content}```"
             reply_target = f"@{sender_username}" if sender_username else str(sender_id)
             reply_text = f"{reply_target} "
             keyboard = {
@@ -182,7 +230,7 @@ def process_update(update):
             whisper_data = whispers.get(unique_id)
 
             if not whisper_data:
-                answer_callback_query(callback_id, "⌛️ نجوا منقضی شده! 🕒", False)
+                answer_callback_query(callback_id, "⌛️ نجوا منقضی شده! 🕒", True)
                 return
 
             user = callback["from"]
@@ -194,7 +242,7 @@ def process_update(update):
 
             is_allowed = (
                 user_id == whisper_data["sender_id"] or
-                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"]) or
+                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower()) or
                 (whisper_data["receiver_user_id"] and user_id == str(whisper_data["receiver_user_id"]))
             )
 
@@ -206,8 +254,8 @@ def process_update(update):
                 whisper_data["curious_users"].add(user_display_name)
 
             receiver_id_display = escape_markdown(whisper_data["receiver_display_name"])
-            code_content = format_block_code(whisper_data).replace("هنوز دیده نشده", "Unopened")
-            new_text = f"{receiver_id_display}\n\n\n{code_content}\n"
+            code_content = format_block_code(whisper_data).replace("هنوز دیده نشده", "Don't see.")
+            new_text = f"{receiver_id_display}\n\n```{code_content}```"
 
             reply_target = f"@{whisper_data['sender_username']}" if whisper_data['sender_username'] else str(whisper_data['sender_id'])
             reply_text = f"{reply_target} "
@@ -233,4 +281,4 @@ def process_update(update):
                 )
 
             response_text = f"🔐 پیام نجوا:\n{whisper_data['secret_message']} 🎁" if is_allowed else "⚠️ این نجوا برای تو نیست! 😕"
-            answer_callback_query(callback_id, response_text, is_allowed)
+            answer_callback_query(callback_id, response_text, show_alert=True)
