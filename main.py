@@ -53,6 +53,24 @@ def get_user_first_name(user_id):
         logger.error("Error fetching first name for user_id %s: %s", user_id, str(e))
         return "Unknown"
 
+def resolve_user_id(receiver_id, receiver_username=None):
+    """تبدیل یوزرنیم به آیدی عددی یا تأیید آیدی عددی"""
+    if receiver_id.isdigit():
+        return receiver_id
+    if receiver_username:
+        url = URL + "getChat"
+        params = {"chat_id": f"@{receiver_username}"}
+        try:
+            resp = requests.get(url, params=params).json()
+            if resp.get("ok"):
+                user_id = str(resp["result"]["id"])
+                print(f"Resolved user_id for @{receiver_username}: {user_id}")
+                return user_id
+        except Exception as e:
+            logger.error("Error resolving user_id for username @%s: %s", receiver_username, str(e))
+    logger.error("Could not resolve user_id for receiver_id %s", receiver_id)
+    return None
+
 def process_update(update):
     """پردازش آپدیت‌های دریافتی از تلگرام"""
     global whispers
@@ -109,7 +127,7 @@ def process_update(update):
                         "message_text": f"📩 پیام خود را برای {receiver.get('display_name', 'Unknown')} وارد کنید"
                     },
                     "description": f"ارسال نجوا به {receiver_first_name}",
-                    "thumb_url": receiver.get("profile_photo_url", "")
+                    "thumb_url": profile_photo_url if profile_photo_url else "https://via.placeholder.com/150"
                 }
                 results.append(result)
 
@@ -136,7 +154,9 @@ def process_update(update):
                     receiver["profile_photo_url"] = profile_photo_url if profile_photo_url else ""
                     save_history(sender_id, receiver)
 
-                    actual_receiver_id = receiver_user_id if receiver_user_id else receiver_id.lstrip('@')
+                    actual_receiver_id = resolve_user_id(receiver_id, receiver_username)
+                    if not actual_receiver_id:
+                        continue
 
                     unique_id = uuid.uuid4().hex
                     whispers[unique_id] = {
@@ -155,10 +175,11 @@ def process_update(update):
                     }
                     save_whispers(whispers)
 
+                    # استفاده از first_name به جای display_name و لینک‌دار کردن از ابتدا
                     receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                    receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"  # لینک‌دار از ابتدا
+                    receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
                     code_content = format_block_code(whispers[unique_id])
-                    public_text = f"{receiver_link}\n```{code_content}```"
+                    public_text = f"{receiver_link}\n```\n{code_content}\n```"
 
                     reply_target = f"@{sender_username}" if sender_username else str(sender_id)
                     reply_text = f"{reply_target} "
@@ -179,7 +200,7 @@ def process_update(update):
                         },
                         "reply_markup": keyboard,
                         "description": f"پیام: {secret_message[:15]}...",
-                        "thumb_url": profile_photo_url if profile_photo_url else ""
+                        "thumb_url": profile_photo_url if profile_photo_url else "https://via.placeholder.com/150"
                     })
                 set_cached_inline_query(sender_id, query_text, results)
                 answer_inline_query(query_id, results)
@@ -199,23 +220,24 @@ def process_update(update):
                 else:
                     raise ValueError("شناسه گیرنده نامعتبر")
 
-                unique_id = uuid.uuid4().hex
                 sender_username = sender.get("username", "").lstrip('@').lower() if sender.get("username") else None
                 sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
-                receiver_display_name = f"@{receiver_username}" if receiver_username else str(receiver_user_id)
 
-                receiver_first_name = get_user_first_name(receiver_user_id) if receiver_user_id else receiver_username or "Unknown"
+                actual_receiver_id = resolve_user_id(receiver_id, receiver_username)
+                if not actual_receiver_id:
+                    raise ValueError("نمی‌توان آیدی عددی گیرنده را پیدا کرد")
 
-                profile_photo, profile_photo_url = get_user_profile_photo(int(receiver_user_id)) if receiver_user_id else (None, None)
+                receiver_first_name = get_user_first_name(actual_receiver_id)
+                receiver_display_name = f"@{receiver_username}" if receiver_username else str(actual_receiver_id)
 
-                actual_receiver_id = receiver_user_id if receiver_user_id else receiver_id.lstrip('@')
+                profile_photo, profile_photo_url = get_user_profile_photo(int(actual_receiver_id))
 
-                existing_receiver = next((r for r in history.get(sender_id, []) if r.get("receiver_id") == (f"@{receiver_username}" if receiver_username else str(receiver_user_id))), None)
+                existing_receiver = next((r for r in history.get(sender_id, []) if r.get("receiver_id") == (f"@{receiver_username}" if receiver_username else str(actual_receiver_id))), None)
                 if not existing_receiver:
                     if sender_id not in history:
                         history[sender_id] = []
                     receiver_data = {
-                        "receiver_id": f"@{receiver_username}" if receiver_username else str(receiver_user_id),
+                        "receiver_id": f"@{receiver_username}" if receiver_username else str(actual_receiver_id),
                         "display_name": receiver_display_name,
                         "first_name": receiver_first_name,
                         "profile_photo_url": profile_photo_url if profile_photo_url else "",
@@ -225,12 +247,13 @@ def process_update(update):
                     history[sender_id] = history[sender_id][-10:]
                     save_history(sender_id, receiver_data)
 
+                unique_id = uuid.uuid4().hex
                 whispers[unique_id] = {
                     "sender_id": sender_id,
                     "sender_username": sender_username,
                     "sender_display_name": sender_display_name,
                     "receiver_username": receiver_username,
-                    "receiver_user_id": receiver_user_id,
+                    "receiver_user_id": actual_receiver_id,
                     "receiver_id": actual_receiver_id,
                     "receiver_display_name": receiver_display_name,
                     "first_name": receiver_first_name,
@@ -241,10 +264,11 @@ def process_update(update):
                 }
                 save_whispers(whispers)
 
+                # استفاده از first_name به جای display_name و لینک‌دار کردن از ابتدا
                 receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"  # لینک‌دار از ابتدا
+                receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
                 code_content = format_block_code(whispers[unique_id])
-                public_text = f"{receiver_link}\n```{code_content}```"
+                public_text = f"{receiver_link}\n```\n{code_content}\n```"
 
                 reply_target = f"@{sender_username}" if sender_username else str(sender_id)
                 reply_text = f"{reply_target} "
@@ -266,7 +290,7 @@ def process_update(update):
                         },
                         "reply_markup": keyboard,
                         "description": f"پیام: {secret_message[:15]}...",
-                        "thumb_url": profile_photo_url if profile_photo_url else ""
+                        "thumb_url": profile_photo_url if profile_photo_url else "https://via.placeholder.com/150"
                     },
                     base_result
                 ]
@@ -312,12 +336,14 @@ def process_update(update):
                 whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
                 save_whispers(whispers)
 
+            # استفاده از first_name به جای display_name و لینک‌دار کردن
             receiver_first_name = whisper_data["first_name"]
             receiver_id = whisper_data["receiver_id"]
+            receiver_username = whisper_data["receiver_username"]
             receiver_first_name_escaped = escape_markdown(receiver_first_name)
-            receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"  # لینک‌دار از ابتدا
+            receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"
             code_content = format_block_code(whisper_data)
-            new_text = f"{receiver_link}\n```{code_content}```"
+            new_text = f"{receiver_link}\n```\n{code_content}\n```"
 
             reply_target = f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])
             reply_text = f"{reply_target} "
