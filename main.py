@@ -186,7 +186,7 @@ def process_update(update):
 
             whispers[unique_id] = {
                 "sender_id": sender_id,
-                "sender_username": receiver_username,
+                "sender_username": sender_username,
                 "sender_display_name": sender_display_name,
                 "receiver_username": receiver_username,
                 "receiver_user_id": receiver_user_id,
