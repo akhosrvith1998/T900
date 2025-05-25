@@ -16,7 +16,8 @@ def get_user_profile_photo(user_id):
     try:
         resp = requests.get(url, params=params).json()
         if resp.get("ok") and resp["result"]["total_count"] > 0:
-            file_id = resp["result"]["photos"][0][0]["file_id"]
+            # 🟢 اولویت استفاده از عکس اصلی پروفایل
+            file_id = resp["result"]["photos"][0][-1]["file_id"]  # آخرین سایز عکس
             file_path_url = URL + "getFile"
             file_params = {"file_id": file_id}
             file_resp = requests.get(file_path_url, params=file_params).json()
