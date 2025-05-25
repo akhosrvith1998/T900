@@ -157,6 +157,7 @@ def process_update(update):
                         "sender_id": sender_id,
                         "receiver_username": receiver_username,
                         "receiver_user_id": receiver_user_id,
+                        "receiver_id": receiver_id,  # اضافه کردن receiver_id برای جلوگیری از KeyError
                         "first_name": receiver_first_name,
                         "secret_message": secret_message,
                         "curious_users": [],
@@ -223,7 +224,8 @@ def process_update(update):
                 else:
                     receiver_first_name = get_user_first_name(actual_receiver_id)
 
-                receiver_display_name = f"@{receiver_username}" if receiver_username else str(actual_receiver_id)
+                # 🟢 تغییر اول: نمایش نام واقعی به جای یوزرنیم
+                receiver_display_name = receiver_first_name  # قبلاً: f"@{receiver_username}"...
 
                 profile_photo, profile_photo_url = get_user_profile_photo(int(actual_receiver_id)) if actual_receiver_id != "0" else (None, None)
 
@@ -231,9 +233,10 @@ def process_update(update):
                 if not existing_receiver:
                     if sender_id not in history:
                         history[sender_id] = []
+                    # 🟢 تغییر سوم: ذخیره نام واقعی در تاریخچه
                     receiver_data = {
                         "receiver_id": f"@{receiver_username}" if receiver_username else str(actual_receiver_id),
-                        "display_name": receiver_display_name,
+                        "display_name": receiver_first_name,  # قبلاً: receiver_display_name
                         "first_name": receiver_first_name,
                         "profile_photo_url": profile_photo_url if profile_photo_url else "",
                         "curious_users": []
@@ -263,7 +266,8 @@ def process_update(update):
                 save_whispers(whispers)
 
                 receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
+                # 🟢 تغییر دوم: اصلاح ساخت لینک کاربر
+                receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"  # قبلاً: لینک به یوزرنیم
                 code_content = format_block_code(whispers[unique_id])
                 public_text = f"{receiver_link}\n```\n{code_content}\n```"
 
@@ -341,7 +345,7 @@ def process_update(update):
                 save_whispers(whispers)
 
             receiver_first_name = whisper_data["first_name"]
-            receiver_id = whisper_data["receiver_id"]
+            receiver_id = whisper_data.get("receiver_id", "0")  # مقدار پیش‌فرض اگه کلید وجود نداشت
             receiver_username = whisper_data["receiver_username"]
             receiver_first_name_escaped = escape_markdown(receiver_first_name)
             receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"
