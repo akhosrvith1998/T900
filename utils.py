@@ -10,7 +10,7 @@ IRST_OFFSET = timedelta(hours=3, minutes=30)
 
 @lru_cache(maxsize=500)
 def get_user_profile_photo(user_id):
-    """دریافت عکس پروفایل با کیفیت بالا و کش پیشرفته"""
+    """دریافت عکس پروفایل با کیفیت بالا"""
     try:
         resp = requests.get(f"{URL}getUserProfilePhotos", params={
             "user_id": user_id,
@@ -18,19 +18,15 @@ def get_user_profile_photo(user_id):
         }, timeout=5).json()
         
         if resp.get("ok") and resp["result"]["total_count"] > 0:
-            # انتخاب بهترین کیفیت عکس
             file_id = resp["result"]["photos"][0][-1]["file_id"]
-            
-            # دریافت آدرس فایل
             file_resp = requests.get(f"{URL}getFile", params={"file_id": file_id}).json()
             if file_resp.get("ok"):
                 return (
                     file_id,
                     f"https://api.telegram.org/file/bot{TOKEN}/{file_resp['result']['file_path']}"
                 )
-        return None, "https://via.placeholder.com/150/FF0000/FFFFFF?text=No+Photo"
-    except Exception as e:
-        print(f"Error getting photo: {str(e)}")
+        return None, "https://via.placeholder.com/150"
+    except:
         return None, "https://via.placeholder.com/150"
 
 def escape_markdown(text):
