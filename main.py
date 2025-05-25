@@ -118,10 +118,8 @@ def process_update(update):
                 receiver_id = receiver.get("receiver_id", "")
                 if not receiver_id:
                     continue
-                # 🟢 اصلاح دریافت عکس پروفایل با آیدی عددی
                 receiver_user_id = receiver_id.split('@')[-1] if '@' in receiver_id else receiver_id
                 profile_photo, profile_photo_url = get_user_profile_photo(int(receiver_user_id))
-                # 🟢 به‌روزرسانی عکس پروفایل در تاریخچه
                 if profile_photo_url and profile_photo_url != receiver.get("profile_photo_url"):
                     receiver["profile_photo_url"] = profile_photo_url
                     save_history(sender_id, receiver)
@@ -168,7 +166,8 @@ def process_update(update):
                     save_whispers(whispers)
 
                     receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                    receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={receiver_user_id})"
+                    # 🟢 اصلاح لینک تاریخچه برای استفاده از آیدی
+                    receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={receiver_user_id})" if receiver_user_id else f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})"
                     code_content = format_block_code(whispers[unique_id])
                     public_text = f"{receiver_link}\n```\n{code_content}\n```"
 
@@ -186,12 +185,13 @@ def process_update(update):
                         ]
                     }
 
+                    # 🟢 تغییر گزینه‌های تاریخچه برای ارسال نجوا
                     results.append({
                         "type": "article",
                         "id": unique_id,
                         "title": f"🔒 نجوا به {receiver_first_name} 🎉",
                         "input_message_content": {
-                            "message_text": public_text,
+                            "message_text": public_text,  # پیام نجوا به جای پیام قبلی
                             "parse_mode": "MarkdownV2"
                         },
                         "reply_markup": keyboard,
@@ -217,9 +217,8 @@ def process_update(update):
                     return
 
                 actual_receiver_id = resolve_user_id(receiver_id, receiver_username)
-                # 🟢 اصلاح نمایش نام واقعی کاربر
                 if not actual_receiver_id:
-                    receiver_first_name = "کاربر ناشناس"  # به جای استفاده از یوزرنیم
+                    receiver_first_name = "کاربر ناشناس"
                 else:
                     receiver_first_name = get_user_first_name(actual_receiver_id)
 
@@ -229,10 +228,9 @@ def process_update(update):
                 if not existing_receiver:
                     if sender_id not in history:
                         history[sender_id] = []
-                    # 🟢 اصلاح ذخیره‌سازی تاریخچه با نام واقعی
                     receiver_data = {
                         "receiver_id": f"@{receiver_username}" if receiver_username else str(actual_receiver_id),
-                        "display_name": receiver_first_name,  # نام واقعی
+                        "display_name": receiver_first_name,
                         "first_name": receiver_first_name,
                         "profile_photo_url": profile_photo_url if profile_photo_url else "",
                         "curious_users": []
@@ -262,9 +260,7 @@ def process_update(update):
                 save_whispers(whispers)
 
                 receiver_first_name_escaped = escape_markdown(receiver_first_name)
-                # 🟢 اصلاح لینک به صورت مستقیم با آیدی کاربر
                 receiver_link = f"[{receiver_first_name_escaped}](tg://user?id={actual_receiver_id})"
-
                 code_content = format_block_code(whispers[unique_id])
                 public_text = f"{receiver_link}\n```\n{code_content}\n```"
 
@@ -282,11 +278,10 @@ def process_update(update):
                     ]
                 }
 
-                # 🟢 اصلاح عنوان و توضیحات نتیجه اینلاین
                 results.append({
                     "type": "article",
                     "id": unique_id,
-                    "title": f"🔒 نجوا به {receiver_first_name} 🎉",  # نام واقعی
+                    "title": f"🔒 نجوا به {receiver_first_name} 🎉",
                     "input_message_content": {
                         "message_text": public_text,
                         "parse_mode": "MarkdownV2"
@@ -341,7 +336,7 @@ def process_update(update):
                 save_whispers(whispers)
 
             receiver_first_name = whisper_data["first_name"]
-            receiver_id = whisper_data.get("receiver_id", "0")  # مقدار پیش‌فرض اگه کلید وجود نداشت
+            receiver_id = whisper_data.get("receiver_id", "0")
             receiver_username = whisper_data["receiver_username"]
             receiver_first_name_escaped = escape_markdown(receiver_first_name)
             receiver_link = f"[{receiver_first_name_escaped}](https://t.me/{receiver_username})" if receiver_username else f"[{receiver_first_name_escaped}](tg://user?id={receiver_id})"
