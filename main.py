@@ -43,27 +43,30 @@ def process_update(update):
             "description": "همیشه فعال!"
         }
 
+        results = [base_result]
+        # نمایش تاریخچه برای کوئری خالی یا کوئری‌های تک‌کلمه‌ای
+        if sender_id in history:
+            for receiver in sorted(history[sender_id], key=lambda x: x["display_name"]):
+                result = {
+                    "type": "article",
+                    "id": f"history_{receiver['receiver_id']}",
+                    "title": f"نجوا به {receiver['display_name']} ✨",
+                    "input_message_content": {
+                        "message_text": f"📩 پیام خود را برای {receiver['display_name']} وارد کنید"
+                    },
+                    "description": f"ارسال نجوا به {receiver['first_name']}",
+                    "thumb_url": receiver.get("profile_photo_url", "")
+                }
+                results.append(result)
+        
         if not query_text:
-            results = [base_result]
-            if sender_id in history:
-                for receiver in sorted(history[sender_id], key=lambda x: x["display_name"]):
-                    results.append({
-                        "type": "article",
-                        "id": f"history_{receiver['receiver_id']}",
-                        "title": f"نجوا به {receiver['display_name']} ✨",
-                        "input_message_content": {
-                            "message_text": f"📩 پیام خود را برای {receiver['display_name']} وارد کنید"
-                        },
-                        "description": f"ارسال نجوا به {receiver['first_name']}",
-                        "thumb_url": receiver.get("profile_photo_url", ""),
-                    })
             set_cached_inline_query(sender_id, query_text, results)
             answer_inline_query(query_id, results)
             return
 
         try:
             parts = query_text.split(" ", 1)
-            # اگر فقط متن وارد شده باشد و گیرنده از تاریخچه انتخاب شود
+            # اگر فقط متن وارد شده باشد، نجوا برای گیرنده از تاریخچه ارسال می‌شود
             if len(parts) == 1 and sender_id in history:
                 secret_message = parts[0].strip()
                 results = [base_result]
@@ -80,6 +83,10 @@ def process_update(update):
                     sender_username = sender.get("username", "").lstrip('@').lower() if sender.get("username") else None
                     sender_display_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() if sender.get('last_name') else sender.get('first_name', '')
 
+                    # به‌روزرسانی profile_photo_url در تاریخچه
+                    receiver["profile_photo_url"] = profile_photo_url
+                    save_history(sender_id, receiver)
+
                     whispers[unique_id] = {
                         "sender_id": sender_id,
                         "sender_username": sender_username,
@@ -93,7 +100,7 @@ def process_update(update):
                     }
 
                     receiver_id_display = escape_markdown(receiver_display_name)
-                    code_content = format_block_code(whispers[unique_id]).replace("هنوز دیده نشده", "Don't see.")
+                    code_content = format_block_code(whispers[unique_id])
                     public_text = f"{receiver_id_display}\n\n```{code_content}```"
                     reply_target = f"@{sender_username}" if sender_username else str(sender_id)
                     reply_text = f"{reply_target} "
@@ -113,28 +120,15 @@ def process_update(update):
                             "parse_mode": "MarkdownV2"
                         },
                         "reply_markup": keyboard,
-                        "description": f"پیام: {secret_message[:15]}..."
+                        "description": f"پیام: {secret_message[:15]}...",
+                        "thumb_url": receiver.get("profile_photo_url", "")
                     })
                 set_cached_inline_query(sender_id, query_text, results)
                 answer_inline_query(query_id, results)
                 return
 
-            # اگر فقط بخشی از نام گیرنده وارد شده باشد
+            # اگر گیرنده و متن وارد شده باشد
             if len(parts) < 2:
-                results = [base_result]
-                if sender_id in history:
-                    for receiver in sorted(history[sender_id], key=lambda x: x["display_name"]):
-                        if parts[0].lower() in receiver['display_name'].lower() or parts[0].lower() in receiver['first_name'].lower():
-                            results.append({
-                                "type": "article",
-                                "id": f"history_{receiver['receiver_id']}",
-                                "title": f"نجوا به {receiver['display_name']} ✨",
-                                "input_message_content": {
-                                    "message_text": f"📩 پیام خود را برای {receiver['display_name']} وارد کنید"
-                                },
-                                "description": f"ارسال نجوا به {receiver['first_name']}",
-                                "thumb_url": receiver.get("profile_photo_url", ""),
-                            })
                 set_cached_inline_query(sender_id, query_text, results)
                 answer_inline_query(query_id, results)
                 return
@@ -187,7 +181,7 @@ def process_update(update):
             }
 
             receiver_id_display = escape_markdown(receiver_display_name)
-            code_content = format_block_code(whispers[unique_id]).replace("هنوز دیده نشده", "Don't see.")
+            code_content = format_block_code(whispers[unique_id])
             public_text = f"{receiver_id_display}\n\n```{code_content}```"
             reply_target = f"@{sender_username}" if sender_username else str(sender_id)
             reply_text = f"{reply_target} "
@@ -208,10 +202,12 @@ def process_update(update):
                         "parse_mode": "MarkdownV2"
                     },
                     "reply_markup": keyboard,
-                    "description": f"پیام: {secret_message[:15]}..."
+                    "description": f"پیام: {secret_message[:15]}...",
+                    "thumb_url": profile_photo_url
                 },
                 base_result
             ]
+            set_cached_inline_query(sender_id, query_text, results)
             answer_inline_query(query_id, results)
 
         except Exception as e:
@@ -254,7 +250,7 @@ def process_update(update):
                 whisper_data["curious_users"].add(user_display_name)
 
             receiver_id_display = escape_markdown(whisper_data["receiver_display_name"])
-            code_content = format_block_code(whisper_data).replace("هنوز دیده نشده", "Don't see.")
+            code_content = format_block_code(whisper_data)
             new_text = f"{receiver_id_display}\n\n```{code_content}```"
 
             reply_target = f"@{whisper_data['sender_username']}" if whisper_data['sender_username'] else str(whisper_data['sender_id'])
