@@ -53,27 +53,20 @@ def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=N
 def get_user_profile_photo(user_id):
     """Fetch the user's profile photo URL"""
     try:
-        # Get the user's profile photos
         response = requests.get(f"{URL}getUserProfilePhotos", params={"user_id": user_id, "limit": 1}, timeout=10).json()
         if not response.get('ok'):
             logger.error("Failed to get profile photos for user %s: %s", user_id, response.get('description', 'Unknown error'))
             return None, "https://via.placeholder.com/150"
-
         photos = response['result']['photos']
         if not photos:
             logger.info("No profile photos found for user %s (possibly no photo set)", user_id)
             return None, "https://via.placeholder.com/150"
-
-        # Get the first photo (most recent)
-        photo = photos[0][-1]  # Largest size of the first photo
+        photo = photos[0][-1]
         file_id = photo['file_id']
-
-        # Get the file path
         file_response = requests.get(f"{URL}getFile", params={"file_id": file_id}, timeout=10).json()
         if not file_response.get('ok'):
             logger.error("Failed to get file path for file_id %s: %s", file_id, file_response.get('description', 'Unknown error'))
             return None, "https://via.placeholder.com/150"
-
         file_path = file_response['result']['file_path']
         photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
         logger.info("Successfully retrieved photo URL for user %s: %s", user_id, photo_url)
@@ -224,16 +217,14 @@ def process_update(update):
             }]
             
             try:
-                logger.info("Loading history for sender %s: %s", sender_id, history.get(sender_id, []))
+                logger.info("Loading history for sender %s from memory: %s", sender_id, history.get(sender_id, []))
                 if sender_id in history and history[sender_id]:
                     for item in history[sender_id]:
                         photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
-                        # Check if receiver_id is numeric before converting to int
                         receiver_id_numeric = item["receiver_id"] if item["receiver_id"].isdigit() else None
                         if receiver_id_numeric:
                             _, updated_photo = get_user_profile_photo(int(receiver_id_numeric))
                         else:
-                            # Try to resolve username to get photo
                             resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@')) if item["receiver_id"].startswith('@') else (None, None)
                             if resolved_id and user_info:
                                 _, updated_photo = get_user_profile_photo(int(resolved_id))
@@ -258,7 +249,7 @@ def process_update(update):
                             }
                         })
                 else:
-                    logger.warning("No valid history found for sender %s", sender_id)
+                    logger.warning("No valid history found for sender %s in memory: %s", sender_id, history.get(sender_id, []))
             except Exception as e:
                 logger.error("Error loading history: %s", str(e))
 
@@ -357,7 +348,6 @@ def process_update(update):
             last_name = user.get("last_name", "")
             user_display_name = f"{first_name} {last_name}".strip() if last_name else first_name
 
-            # Check if the user is allowed to see the whisper (before resolving username)
             receiver_id = whisper_data["receiver_id"]
             is_allowed = (
                 user_id == whisper_data["sender_id"] or
@@ -365,7 +355,6 @@ def process_update(update):
                 (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
             )
 
-            # If the user is allowed and the receiver_id is a username, try to resolve it to a numeric ID
             photo_url = "https://via.placeholder.com/150"
             if receiver_id.startswith('@') and is_allowed:
                 resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
@@ -375,16 +364,12 @@ def process_update(update):
                     username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
                     display_name = f"{first_name} {user_info.get('last_name', '')}".strip()
                     _, photo_url = get_user_profile_photo(int(new_receiver_id))
-
-                    # Update whisper data
                     whisper_data["receiver_id"] = new_receiver_id
                     whisper_data["receiver_user_id"] = new_receiver_id
                     whisper_data["receiver_username"] = username
                     whisper_data["display_name"] = display_name
                     whisper_data["first_name"] = first_name
                     save_whispers(whispers)
-
-                    # Update history
                     history_entry = {
                         "receiver_id": new_receiver_id,
                         "display_name": display_name,
@@ -396,9 +381,8 @@ def process_update(update):
                     load_history()
                     logger.info("Updated history with resolved user info for %s", new_receiver_id)
                 else:
-                    logger.warning("Could not resolve username %s to ID, proceeding with username-based access", receiver_id)
+                    logger.warning("Could not resolve username %s to ID", receiver_id)
 
-            # Re-check is_allowed after resolving (in case username changed)
             is_allowed = (
                 user_id == whisper_data["sender_id"] or
                 (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
@@ -448,11 +432,11 @@ def process_update(update):
                         text=new_text,
                         reply_markup=keyboard
                     )
-
+                logger.info("Successfully updated message for whisper %s", unique_id)
                 response_text = f"Secret message 💜\n{whisper_data['secret_message']}" if is_allowed else "⚠️ این پیام برای شما نیست!"
                 answer_callback_query(callback_id, response_text, True)
             except Exception as e:
-                logger.error("Error editing message: %s", str(e))
+                logger.error("Error editing message for whisper %s: %s", unique_id, str(e))
                 answer_callback_query(callback_id, "خطا رخ داد! لطفاً دوباره امتحان کنید.", True)
 
         elif data.startswith("secret_"):
@@ -502,7 +486,11 @@ def process_update(update):
                             ]
                         ]
                     }
-                    if inline_message_id:
-                        edit_message_text(inline_message_id=inline_message_id, text=new_text, reply_markup=keyboard)
+                    try:
+                        if inline_message_id:
+                            edit_message_text(inline_message_id=inline_message_id, text=new_text, reply_markup=keyboard)
+                            logger.info("Updated message for whisper %s after adding curious user", unique_id)
+                    except Exception as e:
+                        logger.error("Error updating message for whisper %s: %s", unique_id, str(e))
 
             answer_callback_query(callback_id, response_text, True)
