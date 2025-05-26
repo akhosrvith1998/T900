@@ -51,7 +51,7 @@ def resolve_user_id(receiver_id, reply_to_message=None):
             resolved_id, _ = resolve_username_to_id(username)
             if resolved_id:
                 return resolved_id
-            return receiver_id  # اگه یوزرنیم قابل‌رفع نبود، همون یوزرنیم رو نگه می‌داریم
+            return receiver_id
         elif receiver_id.isdigit():
             logger.info("Using numeric ID: %s", receiver_id)
             return receiver_id
@@ -201,7 +201,7 @@ def process_update(update):
                     "inline_keyboard": [
                         [
                             {"text": "ببینم", "callback_data": f"show_{unique_id}"},
-                            {"text": "پاسخ", "switch_inline_query_current_chat": f"{sender_id}"}
+                            {"text": "پاسخ", "switch_inline_query_current_chat": f"{BOT_USERNAME} {sender_id} "}
                         ],
                         [
                             {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
@@ -349,7 +349,7 @@ def process_update(update):
                         "inline_keyboard": [
                             [
                                 {"text": "ببینم", "callback_data": f"show_{unique_id}"},
-                                {"text": "پاسخ", "switch_inline_query_current_chat": f"{sender_id}"}
+                                {"text": "پاسخ", "switch_inline_query_current_chat": f"{BOT_USERNAME} {sender_id} "}
                             ],
                             [
                                 {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
@@ -433,7 +433,7 @@ def process_update(update):
                     "inline_keyboard": [
                         [
                             {"text": "ببینم", "callback_data": f"show_{unique_id}"},
-                            {"text": "پاسخ", "switch_inline_query_current_chat": f"{reply_target} "}
+                            {"text": "پاسخ", "switch_inline_query_current_chat": f"{BOT_USERNAME} {reply_target} "}
                         ],
                         [
                             {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
@@ -483,7 +483,7 @@ def process_update(update):
                         "inline_keyboard": [
                             [
                                 {"text": "ببینم", "callback_data": f"show_{unique_id}"},
-                                {"text": "پاسخ", "switch_inline_query_current_chat": f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])}
+                                {"text": "پاسخ", "switch_inline_query_current_chat": f"{BOT_USERNAME} {reply_target} "}
                             ]
                         ]
                     }
@@ -515,7 +515,7 @@ def process_update(update):
                         "inline_keyboard": [
                             [
                                 {"text": "ببینم", "callback_data": f"show_{unique_id}"},
-                                {"text": "پاسخ", "switch_inline_query_current_chat": f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])}
+                                {"text": "پاسخ", "switch_inline_query_current_chat": f"{BOT_USERNAME} {reply_target} "}
                             ],
                             [
                                 {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
