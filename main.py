@@ -59,7 +59,7 @@ def get_user_profile_photo(user_id):
             return None, "https://via.placeholder.com/150"
         photos = response['result']['photos']
         if not photos:
-            logger.info("No profile photos found for user %s (possibly no photo set)", user_id)
+            logger.info("No profile photos found for user %s (possibly no photo set or privacy restrictions)", user_id)
             return None, "https://via.placeholder.com/150"
         photo = photos[0][-1]
         file_id = photo['file_id']
@@ -221,22 +221,32 @@ def process_update(update):
                 if sender_id in history and history[sender_id]:
                     for item in history[sender_id]:
                         photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
-                        receiver_id_numeric = item["receiver_id"] if item["receiver_id"].isdigit() else None
-                        if receiver_id_numeric:
-                            _, updated_photo = get_user_profile_photo(int(receiver_id_numeric))
-                        else:
-                            resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@')) if item["receiver_id"].startswith('@') else (None, None)
+                        resolved_receiver_id = item["receiver_id"]
+                        # Try to resolve username to numeric ID for profile photo and link
+                        if not item["receiver_id"].isdigit():
+                            resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@'))
                             if resolved_id and user_info:
-                                _, updated_photo = get_user_profile_photo(int(resolved_id))
+                                resolved_receiver_id = resolved_id
                                 item["display_name"] = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
                                 item["first_name"] = user_info.get('first_name', 'Unknown')
+                                _, updated_photo = get_user_profile_photo(int(resolved_id))
+                                if updated_photo != "https://via.placeholder.com/150":
+                                    item["profile_photo_url"] = updated_photo
+                                    save_history(sender_id, item)
+                                    load_history()
+                                    logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
                             else:
                                 updated_photo = "https://via.placeholder.com/150"
-                        if updated_photo != "https://via.placeholder.com/150" and updated_photo.startswith("https://api.telegram.org"):
-                            item["profile_photo_url"] = updated_photo
-                            save_history(sender_id, item)
-                            load_history()
-                            logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
+                        else:
+                            _, updated_photo = get_user_profile_photo(int(item["receiver_id"]))
+                            if updated_photo != "https://via.placeholder.com/150":
+                                item["profile_photo_url"] = updated_photo
+                                save_history(sender_id, item)
+                                load_history()
+                                logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
+
+                        # Adjust the link for usernames
+                        link_text = f"[{escape_markdown(item['display_name'])}](tg://user?id={resolved_receiver_id})" if resolved_receiver_id.isdigit() else escape_markdown(item["display_name"])
                         results.append({
                             "type": "article",
                             "id": f"hist_{item['receiver_id']}",
@@ -244,8 +254,7 @@ def process_update(update):
                             "description": f"Last sent: {get_irst_time(item['time'])}",
                             "thumb_url": item["profile_photo_url"],
                             "input_message_content": {
-                                "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id'] if item['receiver_id'].isdigit() else '0'})"  
-                                               f"\nTo send again: @Bgnabot {item['receiver_id']} [message]"
+                                "message_text": f"{link_text}\nTo send again: @Bgnabot {item['receiver_id']} [message]"
                             }
                         })
                 else:
