@@ -229,8 +229,8 @@ def process_update(update):
                     for item in history[sender_id]:
                         photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
                         # Ensure photo is updated for each history item
-                        if not photo.startswith("https://via.placeholder.com/"):
-                            _, updated_photo = get_user_profile_photo(int(item["receiver_id"]) if item["receiver_id"].isdigit() else int(history[sender_id][0]["receiver_id"]))
+                        if not photo.startswith("https://api.telegram.org"):
+                            _, updated_photo = get_user_profile_photo(int(item["receiver_id"]) if item["receiver_id"].isdigit() else int(history[sender_id][0]["receiver_id"]) if history[sender_id] else sender_id)
                             if updated_photo != "https://via.placeholder.com/150":
                                 item["profile_photo_url"] = updated_photo
                                 save_history(sender_id, item)
@@ -266,7 +266,7 @@ def process_update(update):
             replied_user = message["reply_to_message"]["from"]
             receiver_id = str(replied_user["id"])
             first_name = replied_user.get("first_name", "Unknown")
-            username = replied_user.get("username", "").lstrip('@") if replied_user.get("username") else None
+            username = replied_user.get("username", "").lstrip('@') if replied_user.get("username") else None
             display_name = f"{first_name} {replied_user.get('last_name', '')}".strip()
             _, photo_url = get_user_profile_photo(int(receiver_id))
             logger.info("Detected reply to user %s (%s) in group chat %s with message: %s", display_name, receiver_id, chat_id, secret_message)
