@@ -156,7 +156,6 @@ def fetch_user_info(receiver_id):
         if not user_info.get('ok'):
             logger.error("Failed to get user info for %s: %s (Error code: %s)", 
                          receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
-            # تغییر: اگر اطلاعات کاربر پیدا نشد، خود ID رو برگردون
             return None, receiver_id, str(receiver_id), "https://via.placeholder.com/150"
         user_info = user_info['result']
         first_name = user_info.get('first_name', 'Unknown')
@@ -173,12 +172,10 @@ def fetch_user_info(receiver_id):
         return username, receiver_id, display_name, photo_url
     except Exception as e:
         logger.error("Error getting user info for %s: %s", receiver_id, str(e))
-        # تغییر: در صورت خطا، خود ID رو برگردون
         return None, receiver_id, str(receiver_id), "https://via.placeholder.com/150"
 
 def resolve_username_to_id(username):
     try:
-        # پیشنهاد دیباگ: چک کن که یوزرنیم خالی نباشه
         if not username or not username.strip():
             logger.warning("Empty or invalid username provided: %s", username)
             return None, None
@@ -202,7 +199,6 @@ def format_diff_block_code(whisper_data):
     view_count = len(receiver_views)
     last_seen_time = receiver_views[-1] if receiver_views else None
     
-    # تنظیم زمان به وقت تهران
     if last_seen_time:
         tehran_time = last_seen_time + TEHRAN_OFFSET
         seen_text = f"opened {time.strftime('%H:%M', time.localtime(tehran_time))}"
@@ -269,7 +265,10 @@ def process_update(update):
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
                 first_name = display_name.split()[0] if display_name else "Unknown"
 
-            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})"
+            # تغییر: لینک رو بسته به وجود یوزرنیم تنظیم کن
+            link = f"https://t.me/{username}" if username else f"tg://user?id={receiver_id}"
+            # فقط display_name رو نشون بده، اما به لینک متصلش کن
+            message_text = f"[{escape_markdown(display_name)}]({link})"
             code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
             public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -366,16 +365,18 @@ def process_update(update):
                                 history = load_history()
                                 logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
 
-                        # پیشنهاد دیباگ: لاگ اضافه کن تا مطمئن شی داده‌ها درست ذخیره می‌شن
                         logger.debug("History item after update: %s", item)
 
-                        # اگر پیام وجود داره و کاربر روی گیرنده کلیک کرده، نجوا رو فوراً بفرست
                         if secret_message:
                             receiver_id = resolved_receiver_id
                             display_name = item["display_name"]
                             first_name = item["first_name"]
                             username = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
-                            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})"
+                            # تغییر: برای تاریخچه هم لینک مناسب رو تولید کن
+                            if not username and receiver_id.isdigit():
+                                username, _, _, _ = fetch_user_info(receiver_id)
+                            link = f"https://t.me/{username}" if username else f"tg://user?id={receiver_id}"
+                            message_text = f"[{escape_markdown(display_name)}]({link})"
                             code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
                             public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -434,6 +435,10 @@ def process_update(update):
                             })
                         else:
                             # نمایش تاریخچه گیرنده‌ها
+                            username_for_link = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
+                            if not username_for_link and item["receiver_id"].isdigit():
+                                username_for_link, _, _, _ = fetch_user_info(item["receiver_id"])
+                            link = f"https://t.me/{username_for_link}" if username_for_link else f"tg://user?id={item['receiver_id']}"
                             results.append({
                                 "type": "article",
                                 "id": f"hist_{item['receiver_id']}",
@@ -467,6 +472,7 @@ def process_update(update):
                                 photo_url = "https://via.placeholder.com/150"
                         else:
                             username, _, display_name, photo_url = fetch_user_info(receiver_id)
+                        link = f"https://t.me/{username}" if username else f"tg://user?id={receiver_id}"
                         results.insert(0, {
                             "type": "article",
                             "id": f"target_{receiver_id}",
@@ -518,7 +524,9 @@ def process_update(update):
             logger.info("Detected reply to user %s (%s) in group chat %s with message: %s", display_name, receiver_id, chat_id, secret_message)
 
             if secret_message:
-                message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})"
+                # تغییر: لینک رو بسته به وجود یوزرنیم تنظیم کن
+                link = f"https://t.me/{username}" if username else f"tg://user?id={receiver_id}"
+                message_text = f"[{escape_markdown(display_name)}]({link})"
                 code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
                 public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -648,7 +656,9 @@ def process_update(update):
             receiver_display_name = whisper_data["display_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
             receiver_username = whisper_data["receiver_username"]
-            message_text = f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})"
+            # تغییر: لینک رو بسته به وجود یوزرنیم تنظیم کن
+            link = f"https://t.me/{receiver_username}" if receiver_username else f"tg://user?id={receiver_id}"
+            message_text = f"[{escape_markdown(receiver_display_name)}]({link})"
             code_content = format_diff_block_code(whisper_data)
             new_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -717,7 +727,9 @@ def process_update(update):
                     receiver_display_name = whisper_data["display_name"]
                     receiver_id = whisper_data.get("receiver_id", "0")
                     receiver_username = whisper_data["receiver_username"]
-                    message_text = f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})"
+                    # تغییر: لینک رو بسته به وجود یوزرنیم تنظیم کن
+                    link = f"https://t.me/{receiver_username}" if receiver_username else f"tg://user?id={receiver_id}"
+                    message_text = f"[{escape_markdown(receiver_display_name)}]({link})"
                     code_content = format_diff_block_code(whisper_data)
                     new_text = f"{message_text}\n```diff\n{code_content}\n```"
                     keyboard = {
@@ -737,7 +749,7 @@ def process_update(update):
                         elif message:
                             edit_message_text(
                                 chat_id=message["chat"]["id"],
-                                message_id=ribbonmessage["message_id"],
+                                message_id=message["message_id"],  # اصلاح: ribbonmessage به message تغییر کرد
                                 text=new_text,
                                 reply_markup=keyboard
                             )
