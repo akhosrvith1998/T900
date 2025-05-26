@@ -76,6 +76,7 @@ def get_user_profile_photo(user_id):
 
         file_path = file_response['result']['file_path']
         photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+        logger.info("Successfully retrieved photo URL for user %s: %s", user_id, photo_url)
         return file_id, photo_url
     except Exception as e:
         logger.error("Error getting profile photo for user %s: %s", user_id, str(e))
@@ -104,9 +105,6 @@ def fetch_user_info(receiver_id):
 def resolve_username_to_id(username):
     """Try to resolve a username to a numeric ID"""
     try:
-        # Try to get user info by sending a message or using getChatMember in a known chat
-        # Since getChat may not work for private users, we can try to find the user in a group or via other methods
-        # For now, we'll assume we can't resolve it directly and return None if it fails
         response = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=10).json()
         if response.get('ok'):
             user_info = response['result']
@@ -136,32 +134,18 @@ def process_update(update):
         
         logger.info("Processing inline query from %s in chat_type %s: '%s'", sender_id, chat_type, query)
 
-        receiver_id = None
+        # Check if query starts with a valid username or ID
+        parts = query.split(maxsplit=1)
+        target = parts[0] if parts else ''
+        secret_message = parts[1] if len(parts) > 1 else ""
+        receiver_id = resolve_user_id(target, sender_id, sender_username, chat_id, reply_to_message) if target and (target.startswith('@') or target.isdigit()) else None
+
         display_name = None
         first_name = None
         username = None
         photo_url = "https://via.placeholder.com/150"
-        secret_message = ""
 
-        if query:
-            parts = query.split(maxsplit=1)
-            target = parts[0] if parts else ''
-            secret_message = parts[1] if len(parts) > 1 else ""
-            
-            receiver_id = resolve_user_id(target, sender_id, sender_username, chat_id, reply_to_message)
-            
-            if not receiver_id:
-                logger.warning("Invalid user ID or username: %s", target)
-                answer_inline_query(inline_query["id"], [{
-                    "type": "article",
-                    "id": "error",
-                    "title": "❌ User not found!",
-                    "input_message_content": {
-                        "message_text": "Error: Username not found, user may not exist, or bot is blocked! Try replying to a message in a group with @Bgnabot [message]."
-                    }
-                }])
-                return
-
+        if receiver_id and secret_message:
             if receiver_id.startswith('@'):
                 display_name = receiver_id
                 first_name = receiver_id.lstrip('@')
@@ -170,98 +154,104 @@ def process_update(update):
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
                 first_name = display_name.split()[0] if display_name else "Unknown"
 
-            if secret_message:
-                message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(display_name)
-                code_content = f"{display_name} 0 | Not yet\n__________\nNothing"
-                public_text = f"{message_text}\n```\n{code_content}\n```"
+            message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(display_name)
+            code_content = f"{display_name} 0 | Not yet\n__________\nNothing"
+            public_text = f"{message_text}\n```\n{code_content}\n```"
 
-                unique_id = uuid.uuid4().hex
-                markup = {
-                    "inline_keyboard": [
-                        [
-                            {"text": "Show", "callback_data": f"show_{unique_id}"},
-                            {"text": "Reply", "switch_inline_query_current_chat": f"{sender_id}"}
-                        ],
-                        [
-                            {"text": "Secret Room", "callback_data": f"secret_{unique_id}"}
-                        ]
+            unique_id = uuid.uuid4().hex
+            markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "Show", "callback_data": f"show_{unique_id}"},
+                        {"text": "Reply", "switch_inline_query_current_chat": f"{sender_id}"}
+                    ],
+                    [
+                        {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
                     ]
-                }
+                ]
+            }
 
-                whispers[unique_id] = {
-                    "sender_id": sender_id,
-                    "sender_username": sender_username.lstrip('@') if sender_username else None,
-                    "receiver_id": receiver_id,
-                    "receiver_username": username,
-                    "receiver_user_id": receiver_id if not receiver_id.startswith('@') else None,
-                    "first_name": first_name,
-                    "display_name": display_name,
-                    "secret_message": secret_message,
-                    "receiver_views": [],
-                    "curious_users": []
-                }
-                save_whispers(whispers)
+            whispers[unique_id] = {
+                "sender_id": sender_id,
+                "sender_username": sender_username.lstrip('@') if sender_username else None,
+                "receiver_id": receiver_id,
+                "receiver_username": username,
+                "receiver_user_id": receiver_id if not receiver_id.startswith('@') else None,
+                "first_name": first_name,
+                "display_name": display_name,
+                "secret_message": secret_message,
+                "receiver_views": [],
+                "curious_users": []
+            }
+            save_whispers(whispers)
 
-                history_entry = {
-                    "receiver_id": receiver_id,
-                    "display_name": display_name,
-                    "first_name": first_name,
-                    "profile_photo_url": photo_url,
-                    "time": time.time()
-                }
-                try:
-                    save_history(sender_id, history_entry)
-                    load_history()
-                    logger.info("Saved history for sender %s, receiver %s", sender_id, receiver_id)
-                except Exception as e:
-                    logger.error("Error saving history: %s", str(e))
+            history_entry = {
+                "receiver_id": receiver_id,
+                "display_name": display_name,
+                "first_name": first_name,
+                "profile_photo_url": photo_url,
+                "time": time.time()
+            }
+            try:
+                save_history(sender_id, history_entry)
+                load_history()
+                logger.info("Saved history for sender %s, receiver %s", sender_id, receiver_id)
+            except Exception as e:
+                logger.error("Error saving history: %s", str(e))
 
-                answer_inline_query(inline_query["id"], [{
-                    "type": "article",
-                    "id": receiver_id,
-                    "title": f"Send whisper to {display_name}",
-                    "description": f"Message: {secret_message[:20]}...",
-                    "thumb_url": photo_url,
-                    "input_message_content": {
-                        "message_text": public_text,
-                        "parse_mode": "MarkdownV2"
-                    },
-                    "reply_markup": markup
-                }])
-                return
+            answer_inline_query(inline_query["id"], [{
+                "type": "article",
+                "id": receiver_id,
+                "title": f"Secret to💭 {display_name}",
+                "description": f"Message: {secret_message[:20]}...",
+                "thumb_url": photo_url,
+                "input_message_content": {
+                    "message_text": public_text,
+                    "parse_mode": "MarkdownV2"
+                },
+                "reply_markup": markup
+            }])
+        else:
+            # Show history even if text is typed, unless a valid target is specified
+            results = [{
+                "type": "article",
+                "id": "help",
+                "title": "Help",
+                "input_message_content": {
+                    "message_text": "To send a secret:\n@Bgnabot [ID/username] [message]\nOr reply to a message in a group with @Bgnabot [message]"
+                },
+                "thumb_url": "https://via.placeholder.com/150"
+            }]
+            
+            try:
+                logger.info("Loading history for sender %s: %s", sender_id, history.get(sender_id, []))
+                if sender_id in history:
+                    for item in history[sender_id]:
+                        photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
+                        # Ensure photo is updated for each history item
+                        if not photo.startswith("https://via.placeholder.com/"):
+                            _, updated_photo = get_user_profile_photo(int(item["receiver_id"]) if item["receiver_id"].isdigit() else int(history[sender_id][0]["receiver_id"]))
+                            if updated_photo != "https://via.placeholder.com/150":
+                                item["profile_photo_url"] = updated_photo
+                                save_history(sender_id, item)
+                                load_history()
+                                logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
+                        results.append({
+                            "type": "article",
+                            "id": f"hist_{item['receiver_id']}",
+                            "title": f"Secret to💭 {item['display_name']}",
+                            "description": f"Last sent: {get_irst_time(item['time'])}",
+                            "thumb_url": item["profile_photo_url"],
+                            "input_message_content": {
+                                "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id']})\nTo send again: @Bgnabot {item['receiver_id']} [message]"
+                            }
+                        })
+                else:
+                    logger.info("No history found for sender %s", sender_id)
+            except Exception as e:
+                logger.error("Error loading history: %s", str(e))
 
-        # Show history if no query is provided
-        results = [{
-            "type": "article",
-            "id": "help",
-            "title": "Help",
-            "input_message_content": {
-                "message_text": "To send a whisper:\n@Bgnabot [ID/username] [message]\nOr reply to a message in a group with @Bgnabot [message]"
-            },
-            "thumb_url": "https://via.placeholder.com/150"
-        }]
-        
-        try:
-            logger.info("Loading history for sender %s: %s", sender_id, history.get(sender_id, []))
-            if sender_id in history:
-                for item in history[sender_id]:
-                    photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
-                    results.append({
-                        "type": "article",
-                        "id": f"hist_{item['receiver_id']}",
-                        "title": f"Send whisper to {item['display_name']}",
-                        "description": f"Last sent: {get_irst_time(item['time'])}",
-                        "thumb_url": photo,
-                        "input_message_content": {
-                            "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id']})\nTo send again: @Bgnabot {item['receiver_id']} [message]"
-                        }
-                    })
-            else:
-                logger.info("No history found for sender %s", sender_id)
-        except Exception as e:
-            logger.error("Error loading history: %s", str(e))
-
-        answer_inline_query(inline_query["id"], results)
+            answer_inline_query(inline_query["id"], results)
 
     elif "message" in update and "reply_to_message" in update["message"] and update["message"]["chat"]["type"] in ["group", "supergroup"]:
         message = update["message"]
@@ -276,7 +266,7 @@ def process_update(update):
             replied_user = message["reply_to_message"]["from"]
             receiver_id = str(replied_user["id"])
             first_name = replied_user.get("first_name", "Unknown")
-            username = replied_user.get("username", "").lstrip('@') if replied_user.get("username") else None
+            username = replied_user.get("username", "").lstrip('@") if replied_user.get("username") else None
             display_name = f"{first_name} {replied_user.get('last_name', '')}".strip()
             _, photo_url = get_user_profile_photo(int(receiver_id))
             logger.info("Detected reply to user %s (%s) in group chat %s with message: %s", display_name, receiver_id, chat_id, secret_message)
@@ -294,7 +284,7 @@ def process_update(update):
                             {"text": "Reply", "switch_inline_query_current_chat": f"{sender_id}"}
                         ],
                         [
-                            {"text": "Secret Room", "callback_data": f"secret_{unique_id}"}
+                            {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
                         ]
                     ]
                 }
@@ -395,7 +385,6 @@ def process_update(update):
                     load_history()
                     logger.info("Updated history with resolved user info for %s", new_receiver_id)
                 else:
-                    # If resolving fails, we still allow access based on username
                     logger.warning("Could not resolve username %s to ID, proceeding with username-based access", receiver_id)
 
             # Re-check is_allowed after resolving (in case username changed)
@@ -428,7 +417,7 @@ def process_update(update):
                         {"text": "Reply", "switch_inline_query_current_chat": reply_text}
                     ],
                     [
-                        {"text": "Secret Room", "callback_data": f"secret_{unique_id}"}
+                        {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
                     ]
                 ]
             }
@@ -448,7 +437,7 @@ def process_update(update):
                         reply_markup=keyboard
                     )
 
-                response_text = f"🔐 Whisper message:\n{whisper_data['secret_message']}" if is_allowed else "⚠️ این پیام برای شما نیست!"
+                response_text = f"Secret message 💜\n{whisper_data['secret_message']}" if is_allowed else "⚠️ این پیام برای شما نیست!"
                 answer_callback_query(callback_id, response_text, True)
             except Exception as e:
                 logger.error("Error editing message: %s", str(e))
