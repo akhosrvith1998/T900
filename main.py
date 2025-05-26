@@ -82,7 +82,7 @@ def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=N
         if reply_to_message and 'from' in reply_to_message:
             return str(reply_to_message['from']['id'])
         logger.info("Using username directly: @%s", username)
-        return receiver_id  # Keep username as is, resolve later if needed
+        return receiver_id
     elif receiver_id.isdigit():
         logger.info("Using numeric ID: %s", receiver_id)
         return receiver_id
@@ -218,15 +218,22 @@ def process_update(update):
         # Case 1: Valid receiver ID/username + secret message
         if receiver_id and secret_message:
             if receiver_id.startswith('@'):
-                display_name = receiver_id.lstrip('@')  # Use username directly
-                first_name = receiver_id.lstrip('@')
-                username = receiver_id.lstrip('@')
-                _, photo_url = get_user_profile_photo(int(receiver_id)) if receiver_id.isdigit() else (None, "https://via.placeholder.com/150")
+                resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
+                if resolved_id and user_info:
+                    receiver_id = resolved_id
+                    display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                    first_name = user_info.get('first_name', 'Unknown')
+                    username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+                    _, photo_url = get_user_profile_photo(int(receiver_id))
+                else:
+                    display_name = receiver_id.lstrip('@')
+                    first_name = receiver_id.lstrip('@')
+                    username = receiver_id.lstrip('@')
             else:
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
                 first_name = display_name.split()[0] if display_name else "Unknown"
 
-            message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else escape_markdown(display_name)
+            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"@{escape_markdown(username if username else display_name)}"
             code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
             public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -323,34 +330,102 @@ def process_update(update):
                                 history = load_history()
                                 logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
 
-                        results.append({
-                            "type": "article",
-                            "id": f"hist_{item['receiver_id']}",
-                            "title": f"ارسال نجوا به {item['display_name']}",
-                            "description": f"آخرین نجوا: {get_irst_time(item['time'])}",
-                            "thumb_url": item["profile_photo_url"],
-                            "input_message_content": {
-                                "message_text": f"{item['display_name']}\n```diff\n{format_diff_block_code({'display_name': item['display_name'], 'receiver_views': [], 'curious_users': []})}\n```",
-                                "parse_mode": "MarkdownV2"
-                            },
-                            "reply_markup": {
-                                "inline_keyboard": [[
-                                    {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} {secret_message}" if secret_message else f"{BOT_USERNAME} {item['receiver_id']} "}
-                                ]]
+                        if secret_message:  # Directly send whisper if message exists
+                            receiver_id = resolved_receiver_id
+                            display_name = item["display_name"]
+                            first_name = item["first_name"]
+                            username = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
+                            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"@{escape_markdown(username if username else display_name)}"
+                            code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
+                            public_text = f"{message_text}\n```diff\n{code_content}\n```"
+
+                            unique_id = uuid.uuid4().hex
+                            markup = {
+                                "inline_keyboard": [
+                                    [
+                                        {"text": "Show", "callback_data": f"show_{unique_id}"},
+                                        {"text": "Reply", "switch_inline_query_current_chat": f"{sender_id}"}
+                                    ],
+                                    [
+                                        {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
+                                    ]
+                                ]
                             }
-                        })
+
+                            whispers[unique_id] = {
+                                "sender_id": sender_id,
+                                "sender_username": sender_username.lstrip('@') if sender_username else None,
+                                "receiver_id": receiver_id,
+                                "receiver_username": username,
+                                "receiver_user_id": receiver_id if receiver_id.isdigit() else None,
+                                "first_name": first_name,
+                                "display_name": display_name,
+                                "secret_message": secret_message,
+                                "receiver_views": [],
+                                "curious_users": []
+                            }
+                            save_whispers(whispers)
+
+                            history_entry = {
+                                "receiver_id": receiver_id,
+                                "display_name": display_name,
+                                "first_name": first_name,
+                                "profile_photo_url": photo,
+                                "time": time.time()
+                            }
+                            try:
+                                save_history(sender_id, history_entry)
+                                history = load_history()
+                                logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
+                            except Exception as e:
+                                logger.error("Error saving history: %s", str(e))
+
+                            results.append({
+                                "type": "article",
+                                "id": unique_id,
+                                "title": f"Secret to💭 {display_name}",
+                                "description": f"Message: {secret_message[:20]}...",
+                                "thumb_url": photo,
+                                "input_message_content": {
+                                    "message_text": public_text,
+                                    "parse_mode": "MarkdownV2"
+                                },
+                                "reply_markup": markup
+                            })
+                        else:
+                            results.append({
+                                "type": "article",
+                                "id": f"hist_{item['receiver_id']}",
+                                "title": f"ارسال نجوا به {item['display_name']}",
+                                "description": f"آخرین نجوا: {get_irst_time(item['time'])}",
+                                "thumb_url": item["profile_photo_url"],
+                                "input_message_content": {
+                                    "message_text": f"ارسال نجوا به {item['display_name']}\nلطفاً پیام خود را وارد کنید.",
+                                    "parse_mode": "MarkdownV2"
+                                },
+                                "reply_markup": {
+                                    "inline_keyboard": [[
+                                        {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
+                                    ]]
+                                }
+                            })
                 # Add target as priority if provided
                 if target and (target.startswith('@') or target.isdigit()) and not secret_message:
                     receiver_id = resolve_user_id(target)
                     if receiver_id:
                         if receiver_id.startswith('@'):
-                            display_name = receiver_id.lstrip('@')
-                            first_name = receiver_id.lstrip('@')
-                            username = receiver_id.lstrip('@')
-                            photo_url = "https://via.placeholder.com/150"
+                            resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
+                            if resolved_id and user_info:
+                                receiver_id = resolved_id
+                                display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                                username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+                                _, photo_url = get_user_profile_photo(int(receiver_id))
+                            else:
+                                display_name = receiver_id.lstrip('@')
+                                username = receiver_id.lstrip('@')
+                                photo_url = "https://via.placeholder.com/150"
                         else:
                             username, _, display_name, photo_url = fetch_user_info(receiver_id)
-                            first_name = display_name.split()[0] if display_name else "Unknown"
                         results.insert(0, {
                             "type": "article",
                             "id": f"target_{receiver_id}",
@@ -358,7 +433,7 @@ def process_update(update):
                             "description": "لطفاً پیام خود را وارد کنید...",
                             "thumb_url": photo_url,
                             "input_message_content": {
-                                "message_text": f"{display_name}\n```diff\n{format_diff_block_code({'display_name': display_name, 'receiver_views': [], 'curious_users': []})}\n```",
+                                "message_text": f"ارسال نجوا به {display_name}\nلطفاً پیام خود را وارد کنید.",
                                 "parse_mode": "MarkdownV2"
                             },
                             "reply_markup": {
@@ -402,7 +477,7 @@ def process_update(update):
             logger.info("Detected reply to user %s (%s) in group chat %s with message: %s", display_name, receiver_id, chat_id, secret_message)
 
             if secret_message:
-                message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})"
+                message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})"
                 code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
                 public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -531,7 +606,8 @@ def process_update(update):
 
             receiver_display_name = whisper_data["display_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
-            message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else escape_markdown(receiver_display_name)
+            receiver_username = whisper_data["receiver_username"]
+            message_text = f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"@{escape_markdown(receiver_username if receiver_username else receiver_display_name)}"
             code_content = format_diff_block_code(whisper_data)
             new_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -599,7 +675,8 @@ def process_update(update):
 
                     receiver_display_name = whisper_data["display_name"]
                     receiver_id = whisper_data.get("receiver_id", "0")
-                    message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else escape_markdown(receiver_display_name)
+                    receiver_username = whisper_data["receiver_username"]
+                    message_text = f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"@{escape_markdown(receiver_username if receiver_username else receiver_display_name)}"
                     code_content = format_diff_block_code(whisper_data)
                     new_text = f"{message_text}\n```diff\n{code_content}\n```"
                     keyboard = {
