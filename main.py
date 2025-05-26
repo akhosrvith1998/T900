@@ -12,6 +12,9 @@ HISTORY_FILE = "history.json"
 
 USER_INFO_CACHE = {}
 
+# تنظیم آفست زمان تهران (UTC+3:30)
+TEHRAN_OFFSET = 3.5 * 3600  # 3 ساعت و 30 دقیقه به ثانیه
+
 def load_history():
     try:
         with open(HISTORY_FILE, "r") as f:
@@ -40,8 +43,18 @@ def save_history(sender_id, history_entry):
 
         if sender_id not in history_data:
             history_data[sender_id] = []
+        # جلوگیری از تکرار گیرنده در تاریخچه
         if not any(entry['receiver_id'] == history_entry['receiver_id'] for entry in history_data[sender_id]):
             history_data[sender_id].append(history_entry)
+        else:
+            # آپدیت زمان و اطلاعات گیرنده موجود
+            for entry in history_data[sender_id]:
+                if entry['receiver_id'] == history_entry['receiver_id']:
+                    entry['time'] = history_entry['time']
+                    entry['display_name'] = history_entry['display_name']
+                    entry['first_name'] = history_entry['first_name']
+                    entry['profile_photo_url'] = history_entry['profile_photo_url']
+                    break
         with open(HISTORY_FILE, "w") as f:
             json.dump(history_data, f, indent=4)
         logger.info("Successfully saved history for sender %s: %s", sender_id, history_entry)
@@ -171,7 +184,13 @@ def format_diff_block_code(whisper_data):
     
     view_count = len(receiver_views)
     last_seen_time = receiver_views[-1] if receiver_views else None
-    seen_text = f"opened {time.strftime('%H:%M', time.localtime(last_seen_time))}" if last_seen_time else "unopened"
+    
+    # تنظیم زمان به وقت تهران
+    if last_seen_time:
+        tehran_time = last_seen_time + TEHRAN_OFFSET
+        seen_text = f"opened {time.strftime('%H:%M', time.localtime(tehran_time))}"
+    else:
+        seen_text = "unopened"
     
     block_lines = [f"- {display_name} {view_count} │ {seen_text}"]
     block_lines.append("- ───────")
@@ -206,7 +225,7 @@ def process_update(update):
 
         parts = query.split(maxsplit=1)
         target = parts[0] if parts else ''
-        secret_message = parts[1] if len(parts) > 1 else ""
+        secret_message = parts[1] if len(parts) > 1 else query if parts else ""
 
         receiver_id = resolve_user_id(target, sender_id, sender_username, chat_id, reply_to_message) if target and (target.startswith('@') or target.isdigit()) else None
 
@@ -216,7 +235,7 @@ def process_update(update):
         photo_url = "https://via.placeholder.com/150"
 
         # Case 1: Valid receiver ID/username + secret message
-        if receiver_id and secret_message:
+        if receiver_id and secret_message and (receiver_id.startswith('@') or receiver_id.isdigit()):
             if receiver_id.startswith('@'):
                 resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
                 if resolved_id and user_info:
@@ -269,7 +288,7 @@ def process_update(update):
                 "display_name": display_name,
                 "first_name": first_name,
                 "profile_photo_url": photo_url,
-                "time": time.time()
+                "time": time.time()  # زمان به وقت UTC ذخیره می‌شود
             }
             try:
                 save_history(sender_id, history_entry)
@@ -291,7 +310,7 @@ def process_update(update):
                 "reply_markup": markup
             }])
         else:
-            # Case 2: Show history or prompt for new whisper
+            # Case 2: Show history (always show history, even with text)
             results = []
 
             try:
@@ -330,7 +349,8 @@ def process_update(update):
                                 history = load_history()
                                 logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
 
-                        if secret_message:  # Directly send whisper if message exists
+                        # اگر پیام وجود داره و کاربر روی گیرنده کلیک کرده، نجوا رو فوراً بفرست
+                        if secret_message:
                             receiver_id = resolved_receiver_id
                             display_name = item["display_name"]
                             first_name = item["first_name"]
@@ -371,7 +391,7 @@ def process_update(update):
                                 "display_name": display_name,
                                 "first_name": first_name,
                                 "profile_photo_url": photo,
-                                "time": time.time()
+                                "time": time.time()  # زمان به وقت UTC ذخیره می‌شود
                             }
                             try:
                                 save_history(sender_id, history_entry)
@@ -393,11 +413,12 @@ def process_update(update):
                                 "reply_markup": markup
                             })
                         else:
+                            # نمایش تاریخچه گیرنده‌ها
                             results.append({
                                 "type": "article",
                                 "id": f"hist_{item['receiver_id']}",
                                 "title": f"ارسال نجوا به {item['display_name']}",
-                                "description": f"آخرین نجوا: {get_irst_time(item['time'])}",
+                                "description": f"آخرین نجوا: {get_irst_time(item['time'] + TEHRAN_OFFSET)}",  # تنظیم زمان به وقت تهران
                                 "thumb_url": item["profile_photo_url"],
                                 "input_message_content": {
                                     "message_text": f"ارسال نجوا به {item['display_name']}\nلطفاً پیام خود را وارد کنید.",
@@ -513,7 +534,7 @@ def process_update(update):
                     "display_name": display_name,
                     "first_name": first_name,
                     "profile_photo_url": photo_url,
-                    "time": time.time()
+                    "time": time.time()  # زمان به وقت UTC ذخیره می‌شود
                 }
                 try:
                     save_history(sender_id, history_entry)
