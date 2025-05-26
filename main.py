@@ -111,6 +111,7 @@ def resolve_username_to_id(username):
 
 def process_update(update):
     """Process updates received from Telegram"""
+    logger.info("Bot processing update: %s", update)  # Log the full update
     global whispers
 
     if "inline_query" in update:
@@ -187,8 +188,9 @@ def process_update(update):
             }
             try:
                 save_history(sender_id, history_entry)
+                logger.info("Saved history entry for sender %s: %s", sender_id, history_entry)
                 load_history()
-                logger.info("Saved history for sender %s, receiver %s", sender_id, receiver_id)
+                logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
             except Exception as e:
                 logger.error("Error saving history: %s", str(e))
 
@@ -323,8 +325,9 @@ def process_update(update):
                 }
                 try:
                     save_history(sender_id, history_entry)
+                    logger.info("Saved history entry for sender %s: %s", sender_id, history_entry)
                     load_history()
-                    logger.info("Saved history for sender %s, receiver %s", sender_id, receiver_id)
+                    logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
                 except Exception as e:
                     logger.error("Error saving history: %s", str(e))
 
@@ -386,9 +389,13 @@ def process_update(update):
                         "profile_photo_url": photo_url,
                         "time": time.time()
                     }
-                    save_history(whisper_data["sender_id"], history_entry)
-                    load_history()
-                    logger.info("Updated history with resolved user info for %s", new_receiver_id)
+                    try:
+                        save_history(whisper_data["sender_id"], history_entry)
+                        logger.info("Saved history entry for sender %s: %s", whisper_data["sender_id"], history_entry)
+                        load_history()
+                        logger.info("Updated history for sender %s after save: %s", whisper_data["sender_id"], history.get(whisper_data["sender_id"], []))
+                    except Exception as e:
+                        logger.error("Error saving history: %s", str(e))
                 else:
                     logger.warning("Could not resolve username %s to ID", receiver_id)
 
