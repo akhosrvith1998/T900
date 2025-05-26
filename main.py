@@ -10,7 +10,9 @@ from logger import logger
 WHISPERS_FILE = "whispers.json"
 HISTORY_FILE = "history.json"
 
-# Functions to manage history in a JSON file
+# Cache for user info to reduce API calls
+USER_INFO_CACHE = {}
+
 def load_history():
     try:
         with open(HISTORY_FILE, "r") as f:
@@ -24,6 +26,21 @@ def load_history():
 def save_history(sender_id, history_entry):
     try:
         history_data = load_history()
+        # Resolve username to ID before saving
+        if not history_entry['receiver_id'].isdigit():
+            resolved_id, user_info = resolve_username_to_id(history_entry['receiver_id'].lstrip('@'))
+            if resolved_id and user_info:
+                history_entry['receiver_id'] = resolved_id
+                history_entry['display_name'] = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                history_entry['first_name'] = user_info.get('first_name', 'Unknown')
+                _, photo_url = get_user_profile_photo(int(resolved_id))
+                history_entry['profile_photo_url'] = photo_url
+            else:
+                history_entry['receiver_id'] = history_entry['receiver_id']  # Keep as is (username)
+                history_entry['display_name'] = "ناشناخته (حذف شده)"
+                history_entry['first_name'] = "ناشناخته"
+                history_entry['profile_photo_url'] = "https://via.placeholder.com/150"
+
         if sender_id not in history_data:
             history_data[sender_id] = []
         history_data[sender_id].append(history_entry)
@@ -103,23 +120,42 @@ def get_user_profile_photo(user_id):
 
 def fetch_user_info(receiver_id):
     """Fetch user info (ID, username, display name, photo)"""
+    # Check cache first
+    if receiver_id in USER_INFO_CACHE:
+        cached_info = USER_INFO_CACHE[receiver_id]
+        logger.info("Using cached user info for %s: %s", receiver_id, cached_info)
+        return cached_info['username'], receiver_id, cached_info['display_name'], cached_info['photo_url']
+
     if receiver_id.startswith('@'):
-        return None, None, receiver_id, "https://via.placeholder.com/150"
+        resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
+        if resolved_id:
+            receiver_id = resolved_id
+        else:
+            return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
+
     try:
         user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
         if not user_info.get('ok'):
             logger.error("Failed to get user info for %s: %s (Error code: %s)", 
                          receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
-            return None, None, "Unknown", "https://via.placeholder.com/150"
+            return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
         user_info = user_info['result']
         first_name = user_info.get('first_name', 'Unknown')
         username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
         display_name = f"{first_name} {user_info.get('last_name', '')}".strip()
         _, photo_url = get_user_profile_photo(int(receiver_id))
+
+        # Cache the user info
+        USER_INFO_CACHE[receiver_id] = {
+            "username": username,
+            "display_name": display_name,
+            "photo_url": photo_url
+        }
+        logger.info("Cached user info for %s: %s", receiver_id, USER_INFO_CACHE[receiver_id])
         return username, receiver_id, display_name, photo_url
     except Exception as e:
         logger.error("Error getting user info for %s: %s", receiver_id, str(e))
-        return None, None, "Unknown", "https://via.placeholder.com/150"
+        return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
 
 def resolve_username_to_id(username):
     """Try to resolve a username to a numeric ID"""
@@ -147,7 +183,7 @@ def process_update(update):
         query = inline_query.get("query", "").strip()
         sender_id = str(inline_query['from']['id'])
         sender_username = inline_query['from'].get('username', '')
-        chat_type = inline_query.get("chat_type", "unknown")  # Ensure chat_type is always logged
+        chat_type = inline_query.get("chat_type", "unknown")
         chat_id = inline_query.get("chat", {}).get("id")
         reply_to_message = None
 
@@ -216,7 +252,7 @@ def process_update(update):
             }
             try:
                 save_history(sender_id, history_entry)
-                history = load_history()  # Reload history to ensure it's up-to-date
+                history = load_history()
                 logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
             except Exception as e:
                 logger.error("Error saving history: %s", str(e))
@@ -236,7 +272,7 @@ def process_update(update):
         else:
             # Show history or guide message if query is empty
             results = []
-            if not query:  # If query is empty, show a guide message
+            if not query:
                 results.append({
                     "type": "article",
                     "id": "guide",
@@ -248,7 +284,7 @@ def process_update(update):
                 })
             
             try:
-                history = load_history()  # Ensure history is loaded from file
+                history = load_history()
                 logger.info("Loading history for sender %s from file: %s", sender_id, history.get(sender_id, []))
                 if sender_id in history and history[sender_id]:
                     for item in history[sender_id]:
@@ -264,11 +300,18 @@ def process_update(update):
                                 _, updated_photo = get_user_profile_photo(int(resolved_id))
                                 if updated_photo != "https://via.placeholder.com/150":
                                     item["profile_photo_url"] = updated_photo
-                                    save_history(sender_id, item)
-                                    history = load_history()
-                                    logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
+                                else:
+                                    item["profile_photo_url"] = "https://via.placeholder.com/150"
+                                save_history(sender_id, item)
+                                history = load_history()
+                                logger.info("Updated history entry for receiver %s: %s", item["receiver_id"], item)
                             else:
-                                updated_photo = "https://via.placeholder.com/150"
+                                item["display_name"] = "ناشناخته (حذف شده)"
+                                item["first_name"] = "ناشناخته"
+                                item["profile_photo_url"] = "https://via.placeholder.com/150"
+                                save_history(sender_id, item)
+                                history = load_history()
+                                logger.info("Updated history entry for unresolvable receiver %s: %s", item["receiver_id"], item)
                         else:
                             _, updated_photo = get_user_profile_photo(int(item["receiver_id"]))
                             if updated_photo != "https://via.placeholder.com/150":
@@ -291,7 +334,7 @@ def process_update(update):
                         })
                 else:
                     logger.warning("No valid history found for sender %s in file: %s", sender_id, history.get(sender_id, []))
-                    if query:  # Show help message only if query is not empty
+                    if query:
                         results.append({
                             "type": "article",
                             "id": "help",
