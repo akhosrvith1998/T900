@@ -8,7 +8,7 @@ from cache import get_cached_inline_query, set_cached_inline_query
 from logger import logger
 
 WHISPERS_FILE = "whispers.json"
-HISTORY_FILE = "history.json"
+HISTORY_FILE = "history.json"  # این فایل دیگه استفاده نمی‌شه، فقط برای سازگاری نگه داشته شده
 
 USER_INFO_CACHE = {}
 
@@ -25,39 +25,7 @@ def load_history():
         logger.error("Error loading history from file: %s", str(e))
         return {}
 
-def save_history(sender_id, history_entry):
-    try:
-        history_data = load_history()
-        if not history_entry['receiver_id'].isdigit():
-            resolved_id, user_info = resolve_username_to_id(history_entry['receiver_id'].lstrip('@')) if history_entry['receiver_id'].startswith('@') else (None, None)
-            if resolved_id and user_info:
-                history_entry['receiver_id'] = resolved_id
-                history_entry['display_name'] = user_info.get('username', f"{user_info.get('first_name', 'Unknown')}").strip()
-                history_entry['first_name'] = user_info.get('first_name', 'Unknown')
-            else:
-                history_entry['display_name'] = history_entry['receiver_id'].lstrip('@')
-                history_entry['first_name'] = history_entry['receiver_id'].lstrip('@')
-        else:
-            username, _, display_name, _ = fetch_user_info(history_entry['receiver_id'])
-            history_entry['display_name'] = username if username else display_name
-            history_entry['first_name'] = display_name.split()[0] if display_name else "Unknown"
-
-        if sender_id not in history_data:
-            history_data[sender_id] = []
-        
-        existing_entry_index = next((i for i, entry in enumerate(history_data[sender_id]) if entry['receiver_id'] == history_entry['receiver_id']), None)
-        if existing_entry_index is not None:
-            history_data[sender_id][existing_entry_index] = history_entry
-        else:
-            history_data[sender_id].insert(0, history_entry)
-            if len(history_data[sender_id]) > 30:
-                history_data[sender_id] = history_data[sender_id][:30]
-
-        with open(HISTORY_FILE, "w") as f:
-            json.dump(history_data, f, indent=4)
-        logger.info("Successfully saved history for sender %s: %s", sender_id, history_entry)
-    except Exception as e:
-        logger.error("Error saving history to file: %s", str(e))
+# حذف تابع save_history چون دیگه استفاده نمی‌شه
 
 history = load_history()
 
@@ -92,9 +60,9 @@ def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=N
         if receiver_id.startswith('@'):
             username = receiver_id.lstrip('@').lower()
             if reply_to_message and 'from' in reply_to_message:
-                return str(reply_to_message['from']['id'])
+                return str(reply_to_message['from']['id'])  # آیدی عددی گیرنده از ریپلای
             logger.info("Using username directly: @%s", username)
-            return receiver_id
+            return receiver_id  # اگه ریپلای نباشه، یوزرنیم خام رو برگردون
         elif receiver_id.isdigit():
             logger.info("Using numeric ID: %s", receiver_id)
             return receiver_id
@@ -136,13 +104,6 @@ def fetch_user_info(receiver_id):
             logger.info("Using cached user info for %s: %s", receiver_id, cached_info)
             return cached_info['username'], receiver_id, cached_info['display_name'], cached_info['photo_url']
 
-        if receiver_id.startswith('@'):
-            resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
-            if resolved_id:
-                receiver_id = resolved_id
-            else:
-                return None, receiver_id.lstrip('@'), receiver_id.lstrip('@'), None
-
         user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
         if not user_info.get('ok'):
             logger.error("Failed to get user info for %s: %s (Error code: %s)", 
@@ -151,16 +112,16 @@ def fetch_user_info(receiver_id):
         user_info = user_info['result']
         first_name = user_info.get('first_name', 'Unknown')
         username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-        display_name = f"{first_name} {user_info.get('last_name', '')}".strip()
+        display_name = f"{first_name} {user_info.get('last_name', '')}".strip() if not username else f"@{username}"
         _, photo_url = get_user_profile_photo(int(receiver_id))
 
         USER_INFO_CACHE[receiver_id] = {
             "username": username,
-            "display_name": username if username else display_name,
+            "display_name": display_name,
             "photo_url": photo_url
         }
         logger.info("Cached user info for %s: %s", receiver_id, USER_INFO_CACHE[receiver_id])
-        return username, receiver_id, username if username else display_name, photo_url
+        return username, receiver_id, display_name, photo_url
     except Exception as e:
         logger.error("Error getting user info for %s: %s", receiver_id, str(e))
         return None, receiver_id, str(receiver_id), None
@@ -203,7 +164,6 @@ def format_diff_block_code(whisper_data):
 def process_update(update):
     logger.info("Bot processing update: %s", update)
     global whispers
-    global history
 
     if "inline_query" in update:
         inline_query = update["inline_query"]
@@ -230,23 +190,21 @@ def process_update(update):
         username = None
         photo_url = "https://via.placeholder.com/150"
 
-        # Case 1: Valid receiver ID/username + secret message
-        if receiver_id and secret_message and (receiver_id.startswith('@') or receiver_id.isdigit()):
+        # Case 1: Valid receiver ID/username + secret message (از ریپلای یا یوزرنیم مستقیم)
+        if receiver_id and secret_message:
             try:
-                if receiver_id.startswith('@'):
+                if receiver_id.isdigit():  # اگه از ریپلای باشه، آیدی عددی رو استفاده می‌کنیم
+                    username, receiver_id, display_name, _ = fetch_user_info(receiver_id)
+                else:  # اگه یوزرنیم مستقیم باشه
                     resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
                     if resolved_id and user_info:
                         receiver_id = resolved_id
-                        display_name = user_info.get('username', f"{user_info.get('first_name', 'Unknown')}").strip()
-                        first_name = user_info.get('first_name', 'Unknown')
                         username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+                        display_name = f"@{username}" if username else f"{user_info.get('first_name', 'Unknown')}"
+                        first_name = user_info.get('first_name', 'Unknown')
                     else:
                         display_name = receiver_id.lstrip('@')
-                        first_name = receiver_id.lstrip('@')
-                        username = receiver_id.lstrip('@')
-                else:
-                    username, _, display_name, _ = fetch_user_info(receiver_id)
-                    first_name = display_name.split()[0] if display_name else "Unknown"
+                        first_name = display_name
 
                 display_name = f"@{username}" if username else display_name
                 message_text = f"گیرنده ({display_name})"
@@ -270,7 +228,7 @@ def process_update(update):
                 whispers[unique_id] = {
                     "sender_id": sender_id,
                     "sender_username": sender_username.lstrip('@') if sender_username else None,
-                    "receiver_id": receiver_id,
+                    "receiver_id": receiver_id,  # آیدی عددی یا یوزرنیم
                     "receiver_username": username,
                     "receiver_user_id": receiver_id if receiver_id.isdigit() else None,
                     "first_name": first_name,
@@ -281,16 +239,6 @@ def process_update(update):
                     "deleted": False
                 }
                 save_whispers(whispers)
-
-                history_entry = {
-                    "receiver_id": receiver_id,
-                    "display_name": display_name,
-                    "first_name": first_name,
-                    "time": time.time()
-                }
-                save_history(sender_id, history_entry)
-                history = load_history()
-                logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
 
                 answer_inline_query(inline_query["id"], [{
                     "type": "article",
@@ -317,19 +265,18 @@ def process_update(update):
                 }])
 
         # Case 2: Only receiver ID/username provided, no secret message yet
-        elif receiver_id and (receiver_id.startswith('@') or receiver_id.isdigit()) and not secret_message:
+        elif receiver_id and not secret_message:
             try:
-                if receiver_id.startswith('@'):
+                if receiver_id.isdigit():  # اگه از ریپلای باشه
+                    username, receiver_id, display_name, _ = fetch_user_info(receiver_id)
+                else:  # اگه یوزرنیم مستقیم باشه
                     resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
                     if resolved_id and user_info:
                         receiver_id = resolved_id
-                        display_name = user_info.get('username', f"{user_info.get('first_name', 'Unknown')}").strip()
                         username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+                        display_name = f"@{username}" if username else f"{user_info.get('first_name', 'Unknown')}"
                     else:
                         display_name = receiver_id.lstrip('@')
-                        username = receiver_id.lstrip('@')
-                else:
-                    username, _, display_name, _ = fetch_user_info(receiver_id)
 
                 display_name = f"@{username}" if username else display_name
                 results = [
@@ -345,52 +292,11 @@ def process_update(update):
                         },
                         "reply_markup": {
                             "inline_keyboard": [[
-                                {"text": f"ارسال به گیرنده ({display_name})", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
+                                {"text": f"ارسال نجوا (به {display_name})", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
                             ]]
                         }
                     }
                 ]
-
-                # نمایش تاریخچه گیرنده‌ها
-                history = load_history()
-                if sender_id in history and history[sender_id]:
-                    for item in history[sender_id]:
-                        resolved_receiver_id = item["receiver_id"]
-                        if not item["receiver_id"].isdigit():
-                            resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@'))
-                            if resolved_id and user_info:
-                                resolved_receiver_id = resolved_id
-                                item["display_name"] = user_info.get('username', f"{user_info.get('first_name', 'Unknown')}").strip()
-                                item["first_name"] = user_info.get('first_name', 'Unknown')
-                                save_history(sender_id, item)
-                                history = load_history()
-                        else:
-                            username, _, display_name, _ = fetch_user_info(item["receiver_id"])
-                            item["display_name"] = username if username else display_name
-                            item["first_name"] = display_name.split()[0] if display_name else "Unknown"
-                            save_history(sender_id, item)
-                            history = load_history()
-
-                        username_for_link = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
-                        if not username_for_link and item["receiver_id"].isdigit():
-                            username_for_link, _, _, _ = fetch_user_info(item["receiver_id"])
-                        display_name = f"@{username_for_link}" if username_for_link else item["display_name"]
-                        results.append({
-                            "type": "article",
-                            "id": f"hist_{item['receiver_id']}",
-                            "title": f"ارسال نجوا به گیرنده ({display_name})",
-                            "description": f"آخرین نجوا: {get_irst_time(item['time'] + TEHRAN_OFFSET)}",
-                            "thumb_url": photo_url,
-                            "input_message_content": {
-                                "message_text": f"ارسال نجوا به گیرنده ({display_name})\nلطفاً پیام خود را وارد کنید.",
-                                "parse_mode": "MarkdownV2"
-                            },
-                            "reply_markup": {
-                                "inline_keyboard": [[
-                                    {"text": f"ارسال به گیرنده ({display_name})", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
-                                ]]
-                            }
-                        })
                 answer_inline_query(inline_query["id"], results)
             except Exception as e:
                 logger.error("Error processing receiver selection: %s", str(e))
@@ -404,156 +310,23 @@ def process_update(update):
                     "thumb_url": "https://via.placeholder.com/150"
                 }])
 
-        # Case 3: Only secret message provided (use history)
-        elif secret_message and not receiver_id:
-            try:
-                results = []
-                history = load_history()
-                if sender_id in history and history[sender_id]:
-                    for item in history[sender_id]:
-                        receiver_id = item["receiver_id"]
-                        display_name = item["display_name"]
-                        first_name = item["first_name"]
-                        photo = "https://via.placeholder.com/150"
-                        username = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
-                        if not username and receiver_id.isdigit():
-                            username, _, _, _ = fetch_user_info(receiver_id)
-                        display_name = f"@{username}" if username else display_name
-
-                        message_text = f"گیرنده ({display_name})"
-                        code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
-                        public_text = f"{message_text}\n```diff\n{code_content}\n```"
-
-                        unique_id = uuid.uuid4().hex
-                        markup = {
-                            "inline_keyboard": [
-                                [
-                                    {"text": "ببینم", "callback_data": f"show_{unique_id}"},
-                                    {"text": "پاسخ", "switch_inline_query_current_chat": f"{sender_id}"}
-                                ],
-                                [
-                                    {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
-                                    {"text": f"فضول‌ها [{len(whispers.get(unique_id, {}).get('curious_users', []))}]", "callback_data": f"curious_{unique_id}"}
-                                ]
-                            ]
-                        }
-
-                        whispers[unique_id] = {
-                            "sender_id": sender_id,
-                            "sender_username": sender_username.lstrip('@') if sender_username else None,
-                            "receiver_id": receiver_id,
-                            "receiver_username": username,
-                            "receiver_user_id": receiver_id if receiver_id.isdigit() else None,
-                            "first_name": first_name,
-                            "display_name": display_name,
-                            "secret_message": secret_message,
-                            "receiver_views": [],
-                            "curious_users": [],
-                            "deleted": False
-                        }
-                        save_whispers(whispers)
-
-                        history_entry = {
-                            "receiver_id": receiver_id,
-                            "display_name": display_name,
-                            "first_name": first_name,
-                            "time": time.time()
-                        }
-                        save_history(sender_id, history_entry)
-                        history = load_history()
-
-                        results.append({
-                            "type": "article",
-                            "id": unique_id,
-                            "title": f"ارسال نجوا به گیرنده ({display_name})",
-                            "description": f"پیام: {secret_message[:20]}...",
-                            "thumb_url": photo,
-                            "input_message_content": {
-                                "message_text": public_text,
-                                "parse_mode": "MarkdownV2"
-                            },
-                            "reply_markup": markup
-                        })
-                if not results:
-                    results.append({
-                        "type": "article",
-                        "id": "no_history",
-                        "title": "تاریخچه خالیه!",
-                        "input_message_content": {
-                            "message_text": "هنوز به کسی نجوا نفرستادی. یه گیرنده انتخاب کن!"
-                        },
-                        "thumb_url": "https://via.placeholder.com/150"
-                    })
-                answer_inline_query(inline_query["id"], results)
-            except Exception as e:
-                logger.error("Error processing secret message with history: %s", str(e))
-                answer_inline_query(inline_query["id"], [{
-                    "type": "article",
-                    "id": "error",
-                    "title": "خطا!",
-                    "input_message_content": {
-                        "message_text": "مشکلی پیش اومد. لطفاً دوباره امتحان کن."
-                    },
-                    "thumb_url": "https://via.placeholder.com/150"
-                }])
-
-        # Case 4: Nothing provided, show guide and history immediately
+        # Case 3: Nothing provided, show guide
         else:
             try:
                 results = [
                     {
                         "type": "article",
                         "id": "guide",
-                        "title": "( آیدی رو تایپ کن یا از تاریخچه انتخاب کن )",
+                        "title": "( آیدی رو تایپ کن یا از ریپلای استفاده کن )",
                         "input_message_content": {
-                            "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت"
+                            "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت\nیا روی پیام کسی ریپلای کن و @Bgnabot پیامت رو بنویس."
                         },
                         "thumb_url": "https://via.placeholder.com/150"
                     }
                 ]
-
-                history = load_history()
-                if sender_id in history and history[sender_id]:
-                    for item in history[sender_id]:
-                        resolved_receiver_id = item["receiver_id"]
-                        if not item["receiver_id"].isdigit():
-                            resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@'))
-                            if resolved_id and user_info:
-                                resolved_receiver_id = resolved_id
-                                item["display_name"] = user_info.get('username', f"{user_info.get('first_name', 'Unknown')}").strip()
-                                item["first_name"] = user_info.get('first_name', 'Unknown')
-                                save_history(sender_id, item)
-                                history = load_history()
-                        else:
-                            username, _, display_name, _ = fetch_user_info(item["receiver_id"])
-                            item["display_name"] = username if username else display_name
-                            item["first_name"] = display_name.split()[0] if display_name else "Unknown"
-                            save_history(sender_id, item)
-                            history = load_history()
-
-                        username_for_link = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
-                        if not username_for_link and item["receiver_id"].isdigit():
-                            username_for_link, _, _, _ = fetch_user_info(item["receiver_id"])
-                        display_name = f"@{username_for_link}" if username_for_link else item["display_name"]
-                        results.append({
-                            "type": "article",
-                            "id": f"hist_{item['receiver_id']}",
-                            "title": f"ارسال نجوا به گیرنده ({display_name})",
-                            "description": f"آخرین نجوا: {get_irst_time(item['time'] + TEHRAN_OFFSET)}",
-                            "thumb_url": photo_url,
-                            "input_message_content": {
-                                "message_text": f"ارسال نجوا به گیرنده ({display_name})\nلطفاً پیام خود را وارد کنید.",
-                                "parse_mode": "MarkdownV2"
-                            },
-                            "reply_markup": {
-                                "inline_keyboard": [[
-                                    {"text": f"ارسال به گیرنده ({display_name})", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
-                                ]]
-                            }
-                        })
                 answer_inline_query(inline_query["id"], results)
             except Exception as e:
-                logger.error("Error processing guide and history: %s", str(e))
+                logger.error("Error processing guide: %s", str(e))
                 answer_inline_query(inline_query["id"], [{
                     "type": "article",
                     "id": "error",
@@ -576,14 +349,13 @@ def process_update(update):
                 text = text[len(BOT_USERNAME):].strip()
                 secret_message = text
                 replied_user = message["reply_to_message"]["from"]
-                receiver_id = str(replied_user["id"])
+                receiver_id = str(replied_user["id"])  # آیدی عددی گیرنده از ریپلای
                 first_name = replied_user.get("first_name", "Unknown")
                 username = replied_user.get("username", "").lstrip('@') if replied_user.get("username") else None
-                display_name = username if username else first_name
+                display_name = f"@{username}" if username else first_name
                 logger.info("Detected reply to user %s (%s) in group chat %s with message: %s", display_name, receiver_id, chat_id, secret_message)
 
                 if secret_message:
-                    display_name = f"@{username}" if username else display_name
                     message_text = f"گیرنده ({display_name})"
                     code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
                     public_text = f"{message_text}\n```diff\n{code_content}\n```"
@@ -616,15 +388,6 @@ def process_update(update):
                         "deleted": False
                     }
                     save_whispers(whispers)
-
-                    history_entry = {
-                        "receiver_id": receiver_id,
-                        "display_name": display_name,
-                        "first_name": first_name,
-                        "time": time.time()
-                    }
-                    save_history(sender_id, history_entry)
-                    history = load_history()
 
                     requests.post(f"{URL}sendMessage", json={
                         "chat_id": chat_id,
@@ -660,8 +423,7 @@ def process_update(update):
 
                 if whisper_data.get("deleted", False):
                     if (user_id == whisper_data["sender_id"] or
-                        (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
-                        (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())):
+                        (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"])):
                         answer_callback_query(callback_id, "نجوا توسط فرستنده پاک شده🤌🏼", True)
                     else:
                         answer_callback_query(callback_id, "خجالت بکش😐👊🏼", True)
@@ -669,38 +431,7 @@ def process_update(update):
 
                 is_allowed = (
                     user_id == whisper_data["sender_id"] or
-                    (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
-                    (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
-                )
-
-                photo_url = "https://via.placeholder.com/150"
-                if whisper_data["receiver_id"].startswith('@'):
-                    resolved_id, user_info = resolve_username_to_id(whisper_data["receiver_id"].lstrip('@'))
-                    if resolved_id and user_info:
-                        new_receiver_id = resolved_id
-                        display_name = user_info.get('username', f"{user_info.get('first_name', 'Unknown')}").strip()
-                        username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-                        whisper_data["receiver_id"] = new_receiver_id
-                        whisper_data["receiver_user_id"] = new_receiver_id
-                        whisper_data["receiver_username"] = username
-                        whisper_data["display_name"] = f"@{username}" if username else display_name
-                        whisper_data["first_name"] = user_info.get('first_name', 'Unknown')
-                        save_whispers(whispers)
-                        history_entry = {
-                            "receiver_id": new_receiver_id,
-                            "display_name": whisper_data["display_name"],
-                            "first_name": user_info.get('first_name', 'Unknown'),
-                            "time": time.time()
-                        }
-                        save_history(whisper_data["sender_id"], history_entry)
-                        history = load_history()
-                    else:
-                        logger.warning("Could not resolve username %s to ID", whisper_data["receiver_id"])
-
-                is_allowed = (
-                    user_id == whisper_data["sender_id"] or
-                    (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
-                    (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
+                    (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"])
                 )
 
                 if is_allowed and user_id != whisper_data["sender_id"]:
@@ -761,8 +492,7 @@ def process_update(update):
 
                 is_allowed = (
                     user_id == whisper_data["sender_id"] or
-                    (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
-                    (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
+                    (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"])
                 )
 
                 if user_id == whisper_data["sender_id"]:
@@ -843,8 +573,7 @@ def process_update(update):
 
                 is_allowed = (
                     user_id == whisper_data["sender_id"] or
-                    (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
-                    (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
+                    (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"])
                 )
 
                 if is_allowed:
