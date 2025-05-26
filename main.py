@@ -26,7 +26,6 @@ def load_history():
 def save_history(sender_id, history_entry):
     try:
         history_data = load_history()
-        # Resolve username to ID before saving
         if not history_entry['receiver_id'].isdigit():
             resolved_id, user_info = resolve_username_to_id(history_entry['receiver_id'].lstrip('@'))
             if resolved_id and user_info:
@@ -36,7 +35,7 @@ def save_history(sender_id, history_entry):
                 _, photo_url = get_user_profile_photo(int(resolved_id))
                 history_entry['profile_photo_url'] = photo_url
             else:
-                history_entry['receiver_id'] = history_entry['receiver_id']  # Keep as is (username)
+                history_entry['receiver_id'] = history_entry['receiver_id']
                 history_entry['display_name'] = "ناشناخته (حذف شده)"
                 history_entry['first_name'] = "ناشناخته"
                 history_entry['profile_photo_url'] = "https://via.placeholder.com/150"
@@ -79,7 +78,6 @@ TOKEN = os.getenv("BOT_TOKEN", "7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc")
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 
 def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=None, reply_to_message=None):
-    """Resolve username/ID to numeric ID or keep as username"""
     if receiver_id.startswith('@'):
         username = receiver_id.lstrip('@').lower()
         if reply_to_message and 'from' in reply_to_message:
@@ -93,7 +91,6 @@ def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=N
     return None
 
 def get_user_profile_photo(user_id):
-    """Fetch the user's profile photo URL"""
     try:
         response = requests.get(f"{URL}getUserProfilePhotos", params={"user_id": user_id, "limit": 1}, timeout=10).json()
         if not response.get('ok'):
@@ -119,8 +116,6 @@ def get_user_profile_photo(user_id):
         return None, "https://via.placeholder.com/150"
 
 def fetch_user_info(receiver_id):
-    """Fetch user info (ID, username, display name, photo)"""
-    # Check cache first
     if receiver_id in USER_INFO_CACHE:
         cached_info = USER_INFO_CACHE[receiver_id]
         logger.info("Using cached user info for %s: %s", receiver_id, cached_info)
@@ -145,7 +140,6 @@ def fetch_user_info(receiver_id):
         display_name = f"{first_name} {user_info.get('last_name', '')}".strip()
         _, photo_url = get_user_profile_photo(int(receiver_id))
 
-        # Cache the user info
         USER_INFO_CACHE[receiver_id] = {
             "username": username,
             "display_name": display_name,
@@ -158,7 +152,6 @@ def fetch_user_info(receiver_id):
         return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
 
 def resolve_username_to_id(username):
-    """Try to resolve a username to a numeric ID"""
     try:
         response = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=10).json()
         if response.get('ok'):
@@ -173,31 +166,28 @@ def resolve_username_to_id(username):
         return None, None
 
 def format_diff_block_code(whisper_data):
-    """Format block code with diff style (green for +, red for -, neutral for no prefix)"""
+    """Format block code with diff style (all lines with - for red display)"""
     display_name = whisper_data["display_name"]
     receiver_views = whisper_data.get("receiver_views", [])
     curious_users = whisper_data.get("curious_users", [])
     
-    # Status of receiver views
     view_count = len(receiver_views)
     last_seen_time = receiver_views[-1] if receiver_views else None
-    seen_text = f"{view_count} | {time.strftime('%H:%M', time.localtime(last_seen_time))} Seen" if last_seen_time else "Not yet"
+    seen_text = f"opened {time.strftime('%H:%M', time.localtime(last_seen_time))}" if last_seen_time else "unopened"
     
-    # Build the block code
-    block_lines = [f"+ {display_name} {view_count} | {seen_text}"]  # Green line
-    block_lines.append("________")  # Separator line
+    block_lines = [f"- {display_name} {view_count} │ {seen_text}"]
+    block_lines.append("- ───────")
     
     if curious_users:
-        block_lines.append("- Curiosity")  # Red line
+        block_lines.append("- History 🍆")
         for user in curious_users:
-            block_lines.append(f"  {user['name']}")  # Neutral line
+            block_lines.append(f"  {user['name']}")
     else:
-        block_lines.append("- Nothing")  # Red line
+        block_lines.append("- History nothing 🌚")
     
     return "\n".join(block_lines)
 
 def process_update(update):
-    """Process updates received from Telegram"""
     logger.info("Bot processing update: %s", update)
     global whispers
     global history
@@ -216,7 +206,6 @@ def process_update(update):
         
         logger.info("Processing inline query from %s in chat_type %s: '%s'", sender_id, chat_type, query)
 
-        # Check if query starts with a valid username or ID
         parts = query.split(maxsplit=1)
         target = parts[0] if parts else ''
         secret_message = parts[1] if len(parts) > 1 else ""
@@ -294,7 +283,6 @@ def process_update(update):
                 "reply_markup": markup
             }])
         else:
-            # Show history or guide message if query is empty
             results = []
             if not query:
                 results.append({
@@ -314,7 +302,6 @@ def process_update(update):
                     for item in history[sender_id]:
                         photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
                         resolved_receiver_id = item["receiver_id"]
-                        # Try to resolve username to numeric ID for profile photo and link
                         if not item["receiver_id"].isdigit():
                             resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@'))
                             if resolved_id and user_info:
@@ -344,7 +331,6 @@ def process_update(update):
                                 history = load_history()
                                 logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
 
-                        # Adjust the link for usernames
                         link_text = f"[{escape_markdown(item['display_name'])}](tg://user?id={resolved_receiver_id})" if resolved_receiver_id.isdigit() else escape_markdown(item["display_name"])
                         code_content = format_diff_block_code({"display_name": item["display_name"], "receiver_views": [], "curious_users": []})
                         results.append({
@@ -582,16 +568,12 @@ def process_update(update):
                 (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
             )
 
-            if is_allowed:
-                response_text = "به زودی"
-            else:
-                response_text = "⚠️ فقط فرستنده و گیرنده می‌توانند دسترسی داشته باشند!"
+            if not is_allowed:
                 if not any(user['id'] == user_id for user in whisper_data["curious_users"]):
                     whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
                     save_whispers(whispers)
-                    logger.info("Added curious user %s (%s) to whisper %s", user_display_name, user_id, unique_id)
+                    logger.info("Added curious user %s (%s) to whisper %s via Secret Room", user_display_name, user_id, unique_id)
 
-                    # Update the message to reflect the new curious_users
                     receiver_display_name = whisper_data["display_name"]
                     receiver_id = whisper_data.get("receiver_id", "0")
                     message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(receiver_display_name)
@@ -611,8 +593,16 @@ def process_update(update):
                     try:
                         if inline_message_id:
                             edit_message_text(inline_message_id=inline_message_id, text=new_text, reply_markup=keyboard)
-                            logger.info("Updated message for whisper %s after adding curious user", unique_id)
+                        elif message:
+                            edit_message_text(
+                                chat_id=message["chat"]["id"],
+                                message_id=message["message_id"],
+                                text=new_text,
+                                reply_markup=keyboard
+                            )
+                        logger.info("Updated message for whisper %s after adding curious user via Secret Room", unique_id)
                     except Exception as e:
                         logger.error("Error updating message for whisper %s: %s", unique_id, str(e))
 
+            response_text = "به زودی" if is_allowed else "⚠️ فقط فرستنده و گیرنده می‌توانند دسترسی داشته باشند!"
             answer_callback_query(callback_id, response_text, True)
