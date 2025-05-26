@@ -37,9 +37,12 @@ def save_history(sender_id, history_entry):
                 _, photo_url = get_user_profile_photo(int(resolved_id))
                 history_entry['profile_photo_url'] = photo_url
             else:
-                history_entry['display_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته (حذف شده)"
-                history_entry['first_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته"
-                history_entry['profile_photo_url'] = "https://via.placeholder.com/150"
+                # اگر یوزرنیم ریزالو نشد، از ذخیره‌سازی صرف‌نظر کن
+                logger.warning("Username %s could not be resolved, skipping history entry", history_entry['receiver_id'])
+                return
+        else:
+            _, photo_url = get_user_profile_photo(int(history_entry['receiver_id']))
+            history_entry['profile_photo_url'] = photo_url or "https://via.placeholder.com/150"
 
         if sender_id not in history_data:
             history_data[sender_id] = []
@@ -335,12 +338,9 @@ def process_update(update):
                                 history = load_history()
                                 logger.info("Updated history entry for receiver %s: %s", item["receiver_id"], item)
                             else:
-                                item["display_name"] = item["receiver_id"].lstrip('@')
-                                item["first_name"] = item["receiver_id"].lstrip('@')
-                                item["profile_photo_url"] = "https://via.placeholder.com/150"
-                                save_history(sender_id, item)
-                                history = load_history()
-                                logger.info("Updated history entry for unresolvable receiver %s: %s", item["receiver_id"], item)
+                                # اگر یوزرنیم ریزالو نشد، از نمایش صرف‌نظر کن
+                                logger.warning("Could not resolve username %s, skipping history entry", item["receiver_id"])
+                                continue
                         else:
                             _, updated_photo = get_user_profile_photo(int(item["receiver_id"]))
                             if updated_photo != "https://via.placeholder.com/150":
