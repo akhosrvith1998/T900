@@ -234,12 +234,14 @@ def process_update(update):
                             _, updated_photo = get_user_profile_photo(int(receiver_id_numeric))
                         else:
                             # Try to resolve username to get photo
-                            resolved_id, _ = resolve_username_to_id(item["receiver_id"].lstrip('@')) if item["receiver_id"].startswith('@') else (None, None)
-                            if resolved_id:
+                            resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@')) if item["receiver_id"].startswith('@') else (None, None)
+                            if resolved_id and user_info:
                                 _, updated_photo = get_user_profile_photo(int(resolved_id))
+                                item["display_name"] = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                                item["first_name"] = user_info.get('first_name', 'Unknown')
                             else:
                                 updated_photo = "https://via.placeholder.com/150"
-                        if updated_photo != "https://via.placeholder.com/150":
+                        if updated_photo != "https://via.placeholder.com/150" and updated_photo.startswith("https://api.telegram.org"):
                             item["profile_photo_url"] = updated_photo
                             save_history(sender_id, item)
                             load_history()
@@ -251,7 +253,8 @@ def process_update(update):
                             "description": f"Last sent: {get_irst_time(item['time'])}",
                             "thumb_url": item["profile_photo_url"],
                             "input_message_content": {
-                                "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id']})\nTo send again: @Bgnabot {item['receiver_id']} [message]"
+                                "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id'] if item['receiver_id'].isdigit() else '0'})"  # Fix link format
+                                               f"\nTo send again: @Bgnabot {item['receiver_id']} [message]"
                             }
                         })
                 else:
@@ -409,6 +412,7 @@ def process_update(update):
                 if not any(user['id'] == user_id for user in whisper_data["curious_users"]):
                     whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
                     save_whispers(whispers)
+                    logger.info("Added curious user %s (%s) to whisper %s", user_display_name, user_id, unique_id)
 
             receiver_display_name = whisper_data["display_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
@@ -479,5 +483,6 @@ def process_update(update):
                 if not any(user['id'] == user_id for user in whisper_data["curious_users"]):
                     whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
                     save_whispers(whispers)
+                    logger.info("Added curious user %s (%s) to whisper %s", user_display_name, user_id, unique_id)
 
             answer_callback_query(callback_id, response_text, True)
