@@ -181,10 +181,11 @@ def format_diff_block_code(whisper_data):
     # Status of receiver views
     view_count = len(receiver_views)
     last_seen_time = receiver_views[-1] if receiver_views else None
-    seen_text = f"{view_count} | {time.strftime('%H:%M', time.localtime(last_seen_time))}" if last_seen_time else "Not yet"
+    seen_text = f"{view_count} | {time.strftime('%H:%M', time.localtime(last_seen_time))} Seen" if last_seen_time else "Not yet"
     
     # Build the block code
     block_lines = [f"+ {display_name} {view_count} | {seen_text}"]  # Green line
+    block_lines.append("________")  # Separator line
     
     if curious_users:
         block_lines.append("- Curiosity")  # Red line
@@ -237,7 +238,7 @@ def process_update(update):
 
             message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(display_name)
             code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
-            public_text = f"{message_text}\n```\n{code_content}\n```"
+            public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
             unique_id = uuid.uuid4().hex
             markup = {
@@ -353,7 +354,7 @@ def process_update(update):
                             "description": f"Last sent: {get_irst_time(item['time'])}",
                             "thumb_url": item["profile_photo_url"],
                             "input_message_content": {
-                                "message_text": f"{link_text}\n```\n{code_content}\n```\nTo send again: @Bgnabot {item['receiver_id']} [message]"
+                                "message_text": f"{link_text}\n```diff\n{code_content}\n```\nTo send again: @Bgnabot {item['receiver_id']} [message]"
                             }
                         })
                 else:
@@ -394,7 +395,7 @@ def process_update(update):
             if secret_message:
                 message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})"
                 code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
-                public_text = f"{message_text}\n```\n{code_content}\n```"
+                public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
                 unique_id = uuid.uuid4().hex
                 markup = {
@@ -523,7 +524,7 @@ def process_update(update):
             receiver_id = whisper_data.get("receiver_id", "0")
             message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(receiver_display_name)
             code_content = format_diff_block_code(whisper_data)
-            new_text = f"{message_text}\n```\n{code_content}\n```"
+            new_text = f"{message_text}\n```diff\n{code_content}\n```"
 
             reply_target = f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])
             reply_text = f"{reply_target} "
@@ -595,7 +596,7 @@ def process_update(update):
                     receiver_id = whisper_data.get("receiver_id", "0")
                     message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(receiver_display_name)
                     code_content = format_diff_block_code(whisper_data)
-                    new_text = f"{message_text}\n```\n{code_content}\n```"
+                    new_text = f"{message_text}\n```diff\n{code_content}\n```"
                     keyboard = {
                         "inline_keyboard": [
                             [
