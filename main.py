@@ -26,7 +26,7 @@ def load_history():
 def save_history(sender_id, history_entry):
     try:
         history_data = load_history()
-        # Ensure receiver_id is numeric
+        # Resolve username to ID before saving
         if not history_entry['receiver_id'].isdigit():
             resolved_id, user_info = resolve_username_to_id(history_entry['receiver_id'].lstrip('@'))
             if resolved_id and user_info:
@@ -51,25 +51,6 @@ def save_history(sender_id, history_entry):
         logger.error("Error saving history to file: %s", str(e))
 
 history = load_history()
-
-def clean_history():
-    """Clean invalid history entries"""
-    history_data = load_history()
-    for user_id, entries in history_data.items():
-        valid_entries = []
-        for entry in entries:
-            if entry["receiver_id"].isdigit():
-                valid_entries.append(entry)
-            else:
-                resolved_id, _ = resolve_username_to_id(entry["receiver_id"].lstrip('@'))
-                if resolved_id:
-                    entry["receiver_id"] = resolved_id
-                    valid_entries.append(entry)
-        history_data[user_id] = valid_entries
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(history_data, f, indent=4)
-    logger.info("Cleaned history for all users")
-    return history_data
 
 def load_whispers():
     try:
@@ -139,60 +120,80 @@ def get_user_profile_photo(user_id):
 
 def fetch_user_info(receiver_id):
     """Fetch user info (ID, username, display name, photo)"""
+    # Check cache first
     if receiver_id in USER_INFO_CACHE:
         cached_info = USER_INFO_CACHE[receiver_id]
         logger.info("Using cached user info for %s: %s", receiver_id, cached_info)
-        return cached_info
+        return cached_info['username'], receiver_id, cached_info['display_name'], cached_info['photo_url']
 
-    # If input is username
     if receiver_id.startswith('@'):
         resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
-        if not resolved_id:
-            return None, None, "ناشناخته", "https://via.placeholder.com/150"
-        receiver_id = resolved_id
+        if resolved_id:
+            receiver_id = resolved_id
+        else:
+            return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
 
     try:
-        # Get basic info from profile photos
-        response = requests.get(f"{URL}getUserProfilePhotos", 
-                              params={"user_id": receiver_id, "limit": 1}, 
-                              timeout=10).json()
-        if not response.get('ok'):
-            logger.error("Failed to get user profile for %s: %s (Error code: %s)", 
-                        receiver_id, response.get('description', 'Unknown error'), response.get('error_code', 'N/A'))
-            return None, None, "ناشناخته", "https://via.placeholder.com/150"
+        user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
+        if not user_info.get('ok'):
+            logger.error("Failed to get user info for %s: %s (Error code: %s)", 
+                         receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
+            return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
+        user_info = user_info['result']
+        first_name = user_info.get('first_name', 'Unknown')
+        username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+        display_name = f"{first_name} {user_info.get('last_name', '')}".strip()
+        _, photo_url = get_user_profile_photo(int(receiver_id))
 
-        user = response['result']['user']
-        first_name = user.get('first_name', '')
-        last_name = user.get('last_name', '')
-        username = user.get('username', '')
-        display_name = f"{first_name} {last_name}".strip() or "ناشناخته"
-
-        # Get photo
-        _, photo_url = get_user_profile_photo(receiver_id)
-
-        # Cache result
-        USER_INFO_CACHE[receiver_id] = (username, receiver_id, display_name, photo_url)
+        # Cache the user info
+        USER_INFO_CACHE[receiver_id] = {
+            "username": username,
+            "display_name": display_name,
+            "photo_url": photo_url
+        }
         logger.info("Cached user info for %s: %s", receiver_id, USER_INFO_CACHE[receiver_id])
-        return USER_INFO_CACHE[receiver_id]
+        return username, receiver_id, display_name, photo_url
     except Exception as e:
-        logger.error("Fetch error for %s: %s", receiver_id, str(e))
-        return None, None, "ناشناخته", "https://via.placeholder.com/150"
+        logger.error("Error getting user info for %s: %s", receiver_id, str(e))
+        return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
 
 def resolve_username_to_id(username):
-    """Try to resolve username using getUserProfilePhotos"""
+    """Try to resolve a username to a numeric ID"""
     try:
-        response = requests.get(f"{URL}getUserProfilePhotos", 
-                              params={"user_id": f"@{username}", "limit": 1}, 
-                              timeout=10).json()
+        response = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=10).json()
         if response.get('ok'):
-            user = response['result']['user']
-            return str(user['id']), user
-        logger.error("Failed to resolve username @%s: %s (Error code: %s)", 
-                    username, response.get('description', 'Unknown error'), response.get('error_code', 'N/A'))
-        return None, None
+            user_info = response['result']
+            return str(user_info['id']), user_info
+        else:
+            logger.error("Failed to resolve username @%s: %s (Error code: %s)", 
+                         username, response.get('description', 'Unknown error'), response.get('error_code', 'N/A'))
+            return None, None
     except Exception as e:
-        logger.error("Resolve error for @%s: %s", username, str(e))
+        logger.error("Error resolving username @%s: %s", username, str(e))
         return None, None
+
+def format_diff_block_code(whisper_data):
+    """Format block code with diff style (green for +, red for -, neutral for no prefix)"""
+    display_name = whisper_data["display_name"]
+    receiver_views = whisper_data.get("receiver_views", [])
+    curious_users = whisper_data.get("curious_users", [])
+    
+    # Status of receiver views
+    view_count = len(receiver_views)
+    last_seen_time = receiver_views[-1] if receiver_views else None
+    seen_text = f"{view_count} | {time.strftime('%H:%M', time.localtime(last_seen_time))}" if last_seen_time else "Not yet"
+    
+    # Build the block code
+    block_lines = [f"+ {display_name} {view_count} | {seen_text}"]  # Green line
+    
+    if curious_users:
+        block_lines.append("- Curiosity")  # Red line
+        for user in curious_users:
+            block_lines.append(f"  {user['name']}")  # Neutral line
+    else:
+        block_lines.append("- Nothing")  # Red line
+    
+    return "\n".join(block_lines)
 
 def process_update(update):
     """Process updates received from Telegram"""
@@ -232,21 +233,11 @@ def process_update(update):
                 username = receiver_id.lstrip('@')
             else:
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
-                first_name = display_name.split()[0] if display_name and display_name != "ناشناخته" else "Unknown"
+                first_name = display_name.split()[0] if display_name else "Unknown"
 
             message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(display_name)
-            
-            # Create colored block code without +/-
-            code_content = (
-                f"{display_name}\n"
-                f"```plaintext\n"
-                f"Sofia 0 | Not yet\n"  # سبز (Green)
-                f"__________\n"
-                f"Curiosity\n"  # قرمز (Red)
-                f"A\n"  # بدون رنگ (Neutral)
-                f"```"
-            )
-            public_text = f"{message_text}\n{code_content}"
+            code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
+            public_text = f"{message_text}\n```\n{code_content}\n```"
 
             unique_id = uuid.uuid4().hex
             markup = {
@@ -320,37 +311,49 @@ def process_update(update):
                 logger.info("Loading history for sender %s from file: %s", sender_id, history.get(sender_id, []))
                 if sender_id in history and history[sender_id]:
                     for item in history[sender_id]:
-                        # Filter invalid entries
-                        receiver_id = item["receiver_id"]
-                        if not receiver_id.isdigit():
-                            resolved_id, _ = resolve_username_to_id(receiver_id.lstrip('@'))
-                            if resolved_id:
-                                receiver_id = resolved_id
+                        photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
+                        resolved_receiver_id = item["receiver_id"]
+                        # Try to resolve username to numeric ID for profile photo and link
+                        if not item["receiver_id"].isdigit():
+                            resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@'))
+                            if resolved_id and user_info:
+                                resolved_receiver_id = resolved_id
+                                item["display_name"] = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                                item["first_name"] = user_info.get('first_name', 'Unknown')
+                                _, updated_photo = get_user_profile_photo(int(resolved_id))
+                                if updated_photo != "https://via.placeholder.com/150":
+                                    item["profile_photo_url"] = updated_photo
+                                else:
+                                    item["profile_photo_url"] = "https://via.placeholder.com/150"
+                                save_history(sender_id, item)
+                                history = load_history()
+                                logger.info("Updated history entry for receiver %s: %s", item["receiver_id"], item)
                             else:
-                                continue  # Skip invalid entries
+                                item["display_name"] = "ناشناخته (حذف شده)"
+                                item["first_name"] = "ناشناخته"
+                                item["profile_photo_url"] = "https://via.placeholder.com/150"
+                                save_history(sender_id, item)
+                                history = load_history()
+                                logger.info("Updated history entry for unresolvable receiver %s: %s", item["receiver_id"], item)
+                        else:
+                            _, updated_photo = get_user_profile_photo(int(item["receiver_id"]))
+                            if updated_photo != "https://via.placeholder.com/150":
+                                item["profile_photo_url"] = updated_photo
+                                save_history(sender_id, item)
+                                history = load_history()
+                                logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
 
-                        # Fetch user info from cache
-                        username, _, display_name, photo_url = fetch_user_info(receiver_id)
-
-                        # Create colored block code
-                        code_content = (
-                            f"{display_name}\n"
-                            f"```plaintext\n"
-                            f"Sofia 0 | Not yet\n"  # سبز (Green)
-                            f"__________\n"
-                            f"Curiosity\n"  # قرمز (Red)
-                            f"A\n"  # بدون رنگ (Neutral)
-                            f"```"
-                        )
-                        link_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else escape_markdown(display_name)
+                        # Adjust the link for usernames
+                        link_text = f"[{escape_markdown(item['display_name'])}](tg://user?id={resolved_receiver_id})" if resolved_receiver_id.isdigit() else escape_markdown(item["display_name"])
+                        code_content = format_diff_block_code({"display_name": item["display_name"], "receiver_views": [], "curious_users": []})
                         results.append({
                             "type": "article",
-                            "id": f"hist_{receiver_id}",
-                            "title": f"Secret to💭 {display_name}",
+                            "id": f"hist_{item['receiver_id']}",
+                            "title": f"Secret to💭 {item['display_name']}",
                             "description": f"Last sent: {get_irst_time(item['time'])}",
-                            "thumb_url": photo_url,
+                            "thumb_url": item["profile_photo_url"],
                             "input_message_content": {
-                                "message_text": f"{link_text}\n{code_content}\nTo send again: @Bgnabot {receiver_id} [message]"
+                                "message_text": f"{link_text}\n```\n{code_content}\n```\nTo send again: @Bgnabot {item['receiver_id']} [message]"
                             }
                         })
                 else:
@@ -390,17 +393,8 @@ def process_update(update):
 
             if secret_message:
                 message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})"
-                # Create colored block code
-                code_content = (
-                    f"{display_name}\n"
-                    f"```plaintext\n"
-                    f"Sofia 0 | Not yet\n"  # سبز (Green)
-                    f"__________\n"
-                    f"Curiosity\n"  # قرمز (Red)
-                    f"A\n"  # بدون رنگ (Neutral)
-                    f"```"
-                )
-                public_text = f"{message_text}\n{code_content}"
+                code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
+                public_text = f"{message_text}\n```\n{code_content}\n```"
 
                 unique_id = uuid.uuid4().hex
                 markup = {
@@ -528,17 +522,8 @@ def process_update(update):
             receiver_display_name = whisper_data["display_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
             message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(receiver_display_name)
-            # Create colored block code
-            code_content = (
-                f"{receiver_display_name}\n"
-                f"```plaintext\n"
-                f"Sofia 0 | Not yet\n"  # سبز (Green)
-                f"__________\n"
-                f"Curiosity\n"  # قرمز (Red)
-                f"A\n"  # بدون رنگ (Neutral)
-                f"```"
-            )
-            new_text = f"{message_text}\n{code_content}"
+            code_content = format_diff_block_code(whisper_data)
+            new_text = f"{message_text}\n```\n{code_content}\n```"
 
             reply_target = f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])
             reply_text = f"{reply_target} "
@@ -609,16 +594,8 @@ def process_update(update):
                     receiver_display_name = whisper_data["display_name"]
                     receiver_id = whisper_data.get("receiver_id", "0")
                     message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(receiver_display_name)
-                    code_content = (
-                        f"{receiver_display_name}\n"
-                        f"```plaintext\n"
-                        f"Sofia 0 | Not yet\n"  # سبز (Green)
-                        f"__________\n"
-                        f"Curiosity\n"  # قرمز (Red)
-                        f"A\n"  # بدون رنگ (Neutral)
-                        f"```"
-                    )
-                    new_text = f"{message_text}\n{code_content}"
+                    code_content = format_diff_block_code(whisper_data)
+                    new_text = f"{message_text}\n```\n{code_content}\n```"
                     keyboard = {
                         "inline_keyboard": [
                             [
