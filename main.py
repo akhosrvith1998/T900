@@ -196,7 +196,7 @@ def format_diff_block_code(whisper_data):
     block_lines.append("- ───────")
     
     if curious_users:
-        block_lines.append("- History 😒")
+        block_lines.append("- Unsuccessful🔻")
         for user in curious_users:
             block_lines.append(f"  {user['name']}")
     else:
@@ -252,7 +252,7 @@ def process_update(update):
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
                 first_name = display_name.split()[0] if display_name else "Unknown"
 
-            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"@{escape_markdown(username if username else display_name)}"
+            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})"  # استفاده از فرمت یکسان برای هر دو حالت
             code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
             public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -355,7 +355,7 @@ def process_update(update):
                             display_name = item["display_name"]
                             first_name = item["first_name"]
                             username = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
-                            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"@{escape_markdown(username if username else display_name)}"
+                            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})"
                             code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
                             public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -370,114 +370,114 @@ def process_update(update):
                                         {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
                                     ]
                                 ]
-                            }
+            }
 
-                            whispers[unique_id] = {
-                                "sender_id": sender_id,
-                                "sender_username": sender_username.lstrip('@') if sender_username else None,
-                                "receiver_id": receiver_id,
-                                "receiver_username": username,
-                                "receiver_user_id": receiver_id if receiver_id.isdigit() else None,
-                                "first_name": first_name,
-                                "display_name": display_name,
-                                "secret_message": secret_message,
-                                "receiver_views": [],
-                                "curious_users": []
-                            }
-                            save_whispers(whispers)
+            whispers[unique_id] = {
+                "sender_id": sender_id,
+                "sender_username": sender_username.lstrip('@') if sender_username else None,
+                "receiver_id": receiver_id,
+                "receiver_username": username,
+                "receiver_user_id": receiver_id if receiver_id.isdigit() else None,
+                "first_name": first_name,
+                "display_name": display_name,
+                "secret_message": secret_message,
+                "receiver_views": [],
+                "curious_users": []
+            }
+            save_whispers(whispers)
 
-                            history_entry = {
-                                "receiver_id": receiver_id,
-                                "display_name": display_name,
-                                "first_name": first_name,
-                                "profile_photo_url": photo,
-                                "time": time.time()  # زمان به وقت UTC ذخیره می‌شود
-                            }
-                            try:
-                                save_history(sender_id, history_entry)
-                                history = load_history()
-                                logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
-                            except Exception as e:
-                                logger.error("Error saving history: %s", str(e))
-
-                            results.append({
-                                "type": "article",
-                                "id": unique_id,
-                                "title": f"Secret to💭 {display_name}",
-                                "description": f"Message: {secret_message[:20]}...",
-                                "thumb_url": photo,
-                                "input_message_content": {
-                                    "message_text": public_text,
-                                    "parse_mode": "MarkdownV2"
-                                },
-                                "reply_markup": markup
-                            })
-                        else:
-                            # نمایش تاریخچه گیرنده‌ها
-                            results.append({
-                                "type": "article",
-                                "id": f"hist_{item['receiver_id']}",
-                                "title": f"ارسال نجوا به {item['display_name']}",
-                                "description": f"آخرین نجوا: {get_irst_time(item['time'] + TEHRAN_OFFSET)}",  # تنظیم زمان به وقت تهران
-                                "thumb_url": item["profile_photo_url"],
-                                "input_message_content": {
-                                    "message_text": f"ارسال نجوا به {item['display_name']}\nلطفاً پیام خود را وارد کنید.",
-                                    "parse_mode": "MarkdownV2"
-                                },
-                                "reply_markup": {
-                                    "inline_keyboard": [[
-                                        {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
-                                    ]]
-                                }
-                            })
-                # Add target as priority if provided
-                if target and (target.startswith('@') or target.isdigit()) and not secret_message:
-                    receiver_id = resolve_user_id(target)
-                    if receiver_id:
-                        if receiver_id.startswith('@'):
-                            resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
-                            if resolved_id and user_info:
-                                receiver_id = resolved_id
-                                display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
-                                username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-                                _, photo_url = get_user_profile_photo(int(receiver_id))
-                            else:
-                                display_name = receiver_id.lstrip('@')
-                                username = receiver_id.lstrip('@')
-                                photo_url = "https://via.placeholder.com/150"
-                        else:
-                            username, _, display_name, photo_url = fetch_user_info(receiver_id)
-                        results.insert(0, {
-                            "type": "article",
-                            "id": f"target_{receiver_id}",
-                            "title": f"ارسال نجوا به {display_name}",
-                            "description": "لطفاً پیام خود را وارد کنید...",
-                            "thumb_url": photo_url,
-                            "input_message_content": {
-                                "message_text": f"ارسال نجوا به {display_name}\nلطفاً پیام خود را وارد کنید.",
-                                "parse_mode": "MarkdownV2"
-                            },
-                            "reply_markup": {
-                                "inline_keyboard": [[
-                                    {"text": f"ارسال به {display_name}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
-                                ]]
-                            }
-                        })
+            history_entry = {
+                "receiver_id": receiver_id,
+                "display_name": display_name,
+                "first_name": first_name,
+                "profile_photo_url": photo,
+                "time": time.time()  # زمان به وقت UTC ذخیره می‌شود
+            }
+            try:
+                save_history(sender_id, history_entry)
+                history = load_history()
+                logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
             except Exception as e:
-                logger.error("Error loading history: %s", str(e))
+                logger.error("Error saving history: %s", str(e))
 
-            if not results and not query:
-                results.append({
+            results.append({
+                "type": "article",
+                "id": unique_id,
+                "title": f"Secret to💭 {display_name}",
+                "description": f"Message: {secret_message[:20]}...",
+                "thumb_url": photo,
+                "input_message_content": {
+                    "message_text": public_text,
+                    "parse_mode": "MarkdownV2"
+                },
+                "reply_markup": markup
+            })
+        else:
+            # نمایش تاریخچه گیرنده‌ها
+            results.append({
+                "type": "article",
+                "id": f"hist_{item['receiver_id']}",
+                "title": f"ارسال نجوا به {item['display_name']}",
+                "description": f"آخرین نجوا: {get_irst_time(item['time'] + TEHRAN_OFFSET)}",  # تنظیم زمان به وقت تهران
+                "thumb_url": item["profile_photo_url"],
+                "input_message_content": {
+                    "message_text": f"ارسال نجوا به {item['display_name']}\nلطفاً پیام خود را وارد کنید.",
+                    "parse_mode": "MarkdownV2"
+                },
+                "reply_markup": {
+                    "inline_keyboard": [[
+                        {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
+                    ]]
+                }
+            })
+        # Add target as priority if provided
+        if target and (target.startswith('@') or target.isdigit()) and not secret_message:
+            receiver_id = resolve_user_id(target)
+            if receiver_id:
+                if receiver_id.startswith('@'):
+                    resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
+                    if resolved_id and user_info:
+                        receiver_id = resolved_id
+                        display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                        username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+                        _, photo_url = get_user_profile_photo(int(receiver_id))
+                    else:
+                        display_name = receiver_id.lstrip('@')
+                        username = receiver_id.lstrip('@')
+                        photo_url = "https://via.placeholder.com/150"
+                else:
+                    username, _, display_name, photo_url = fetch_user_info(receiver_id)
+                results.insert(0, {
                     "type": "article",
-                    "id": "guide",
-                    "title": "راهنما",
+                    "id": f"target_{receiver_id}",
+                    "title": f"ارسال نجوا به {display_name}",
+                    "description": "لطفاً پیام خود را وارد کنید...",
+                    "thumb_url": photo_url,
                     "input_message_content": {
-                        "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت"
+                        "message_text": f"ارسال نجوا به {display_name}\nلطفاً پیام خود را وارد کنید.",
+                        "parse_mode": "MarkdownV2"
                     },
-                    "thumb_url": "https://via.placeholder.com/150"
+                    "reply_markup": {
+                        "inline_keyboard": [[
+                            {"text": f"ارسال به {display_name}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
+                        ]]
+                    }
                 })
+    except Exception as e:
+        logger.error("Error loading history: %s", str(e))
 
-            answer_inline_query(inline_query["id"], results)
+    if not results and not query:
+        results.append({
+            "type": "article",
+            "id": "guide",
+            "title": "راهنما",
+            "input_message_content": {
+                "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت"
+            },
+            "thumb_url": "https://via.placeholder.com/150"
+        })
+
+    answer_inline_query(inline_query["id"], results)
 
     elif "message" in update and "reply_to_message" in update["message"] and update["message"]["chat"]["type"] in ["group", "supergroup"]:
         message = update["message"]
@@ -628,7 +628,7 @@ def process_update(update):
             receiver_display_name = whisper_data["display_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
             receiver_username = whisper_data["receiver_username"]
-            message_text = f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"@{escape_markdown(receiver_username if receiver_username else receiver_display_name)}"
+            message_text = f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})"
             code_content = format_diff_block_code(whisper_data)
             new_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -697,7 +697,7 @@ def process_update(update):
                     receiver_display_name = whisper_data["display_name"]
                     receiver_id = whisper_data.get("receiver_id", "0")
                     receiver_username = whisper_data["receiver_username"]
-                    message_text = f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"@{escape_markdown(receiver_username if receiver_username else receiver_display_name)}"
+                    message_text = f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else f"[{escape_markdown(receiver_username if receiver_username else receiver_display_name)}](tg://user?id={receiver_id})"
                     code_content = format_diff_block_code(whisper_data)
                     new_text = f"{message_text}\n```diff\n{code_content}\n```"
                     keyboard = {
