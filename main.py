@@ -8,12 +8,11 @@ from cache import get_cached_inline_query, set_cached_inline_query
 from logger import logger
 
 WHISPERS_FILE = "whispers.json"
-HISTORY_FILE = "history.json"  # این فایل دیگه استفاده نمی‌شه، فقط برای سازگاری نگه داشته شده
+HISTORY_FILE = "history.json"  # فقط برای سازگاری نگه داشته شده
 
 USER_INFO_CACHE = {}
 
-# تنظیم آفست زمان تهران (UTC+3:30)
-TEHRAN_OFFSET = 3.5 * 3600  # 3 ساعت و 30 دقیقه به ثانیه
+TEHRAN_OFFSET = 3.5 * 3600
 
 def load_history():
     try:
@@ -24,8 +23,6 @@ def load_history():
     except Exception as e:
         logger.error("Error loading history from file: %s", str(e))
         return {}
-
-# حذف تابع save_history چون دیگه استفاده نمی‌شه
 
 history = load_history()
 
@@ -59,10 +56,12 @@ def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=N
     try:
         if receiver_id.startswith('@'):
             username = receiver_id.lstrip('@').lower()
+            if not username:  # اگه یوزرنیم خالی باشه، null برگردون
+                return None
             if reply_to_message and 'from' in reply_to_message:
-                return str(reply_to_message['from']['id'])  # آیدی عددی گیرنده از ریپلای
+                return str(reply_to_message['from']['id'])
             logger.info("Using username directly: @%s", username)
-            return receiver_id  # اگه ریپلای نباشه، یوزرنیم خام رو برگردون
+            return f"@{username}"  # یوزرنیم خام رو نگه دار
         elif receiver_id.isdigit():
             logger.info("Using numeric ID: %s", receiver_id)
             return receiver_id
@@ -104,7 +103,16 @@ def fetch_user_info(receiver_id):
             logger.info("Using cached user info for %s: %s", receiver_id, cached_info)
             return cached_info['username'], receiver_id, cached_info['display_name'], cached_info['photo_url']
 
-        user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
+        if receiver_id.isdigit():
+            user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
+        else:  # اگه یوزرنیم باشه
+            resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
+            if resolved_id:
+                receiver_id = resolved_id
+                user_info = requests.get(f"{URL}getChat", params={"chat_id": resolved_id}, timeout=10).json()
+            else:
+                return None, receiver_id, receiver_id.lstrip('@'), "https://via.placeholder.com/150"
+
         if not user_info.get('ok'):
             logger.error("Failed to get user info for %s: %s (Error code: %s)", 
                          receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
@@ -181,31 +189,19 @@ def process_update(update):
 
         parts = query.split(maxsplit=1)
         target = parts[0] if parts else ''
-        secret_message = parts[1] if len(parts) > 1 else query if parts else ""
+        secret_message = parts[1] if len(parts) > 1 else ''
 
-        receiver_id = resolve_user_id(target, sender_id, sender_username, chat_id, reply_to_message) if target and (target.startswith('@') or target.isdigit()) else None
+        receiver_id = resolve_user_id(target, sender_id, sender_username, chat_id, reply_to_message) if target else None
 
         display_name = None
         first_name = None
         username = None
         photo_url = "https://via.placeholder.com/150"
 
-        # Case 1: Valid receiver ID/username + secret message (از ریپلای یا یوزرنیم مستقیم)
+        # Case 1: Valid receiver ID/username + secret message
         if receiver_id and secret_message:
             try:
-                if receiver_id.isdigit():  # اگه از ریپلای باشه، آیدی عددی رو استفاده می‌کنیم
-                    username, receiver_id, display_name, _ = fetch_user_info(receiver_id)
-                else:  # اگه یوزرنیم مستقیم باشه
-                    resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
-                    if resolved_id and user_info:
-                        receiver_id = resolved_id
-                        username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-                        display_name = f"@{username}" if username else f"{user_info.get('first_name', 'Unknown')}"
-                        first_name = user_info.get('first_name', 'Unknown')
-                    else:
-                        display_name = receiver_id.lstrip('@')
-                        first_name = display_name
-
+                username, receiver_id, display_name, photo_url = fetch_user_info(receiver_id)
                 display_name = f"@{username}" if username else display_name
                 message_text = f"گیرنده ({display_name})"
                 code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
@@ -228,7 +224,7 @@ def process_update(update):
                 whispers[unique_id] = {
                     "sender_id": sender_id,
                     "sender_username": sender_username.lstrip('@') if sender_username else None,
-                    "receiver_id": receiver_id,  # آیدی عددی یا یوزرنیم
+                    "receiver_id": receiver_id,
                     "receiver_username": username,
                     "receiver_user_id": receiver_id if receiver_id.isdigit() else None,
                     "first_name": first_name,
@@ -239,7 +235,7 @@ def process_update(update):
                     "deleted": False
                 }
                 save_whispers(whispers)
-
+                logger.info("Sending inline query response for whisper %s", unique_id)
                 answer_inline_query(inline_query["id"], [{
                     "type": "article",
                     "id": unique_id,
@@ -267,17 +263,7 @@ def process_update(update):
         # Case 2: Only receiver ID/username provided, no secret message yet
         elif receiver_id and not secret_message:
             try:
-                if receiver_id.isdigit():  # اگه از ریپلای باشه
-                    username, receiver_id, display_name, _ = fetch_user_info(receiver_id)
-                else:  # اگه یوزرنیم مستقیم باشه
-                    resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
-                    if resolved_id and user_info:
-                        receiver_id = resolved_id
-                        username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-                        display_name = f"@{username}" if username else f"{user_info.get('first_name', 'Unknown')}"
-                    else:
-                        display_name = receiver_id.lstrip('@')
-
+                username, receiver_id, display_name, photo_url = fetch_user_info(receiver_id)
                 display_name = f"@{username}" if username else display_name
                 results = [
                     {
@@ -297,6 +283,7 @@ def process_update(update):
                         }
                     }
                 ]
+                logger.info("Sending receiver selection response for %s", receiver_id)
                 answer_inline_query(inline_query["id"], results)
             except Exception as e:
                 logger.error("Error processing receiver selection: %s", str(e))
@@ -324,6 +311,7 @@ def process_update(update):
                         "thumb_url": "https://via.placeholder.com/150"
                     }
                 ]
+                logger.info("Sending guide response")
                 answer_inline_query(inline_query["id"], results)
             except Exception as e:
                 logger.error("Error processing guide: %s", str(e))
@@ -349,7 +337,7 @@ def process_update(update):
                 text = text[len(BOT_USERNAME):].strip()
                 secret_message = text
                 replied_user = message["reply_to_message"]["from"]
-                receiver_id = str(replied_user["id"])  # آیدی عددی گیرنده از ریپلای
+                receiver_id = str(replied_user["id"])
                 first_name = replied_user.get("first_name", "Unknown")
                 username = replied_user.get("username", "").lstrip('@') if replied_user.get("username") else None
                 display_name = f"@{username}" if username else first_name
@@ -389,12 +377,16 @@ def process_update(update):
                     }
                     save_whispers(whispers)
 
-                    requests.post(f"{URL}sendMessage", json={
+                    response = requests.post(f"{URL}sendMessage", json={
                         "chat_id": chat_id,
                         "text": public_text,
                         "parse_mode": "MarkdownV2",
                         "reply_markup": markup
                     })
+                    if response.status_code == 200:
+                        logger.info("Whisper sent successfully for %s", unique_id)
+                    else:
+                        logger.error("Failed to send whisper: %s", response.text)
         except Exception as e:
             logger.error("Error processing group message: %s", str(e))
 
