@@ -32,7 +32,7 @@ def save_history(sender_id, history_entry):
             resolved_id, user_info = resolve_username_to_id(history_entry['receiver_id'].lstrip('@')) if history_entry['receiver_id'].startswith('@') else (None, None)
             if resolved_id and user_info:
                 history_entry['receiver_id'] = resolved_id
-                history_entry['display_name'] = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                history_entry['display_name'] = user_info.get('username', f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}").strip() if user_info.get('username') else f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
                 history_entry['first_name'] = user_info.get('first_name', 'Unknown')
                 _, photo_url = get_user_profile_photo(int(resolved_id))
                 history_entry['profile_photo_url'] = photo_url
@@ -47,14 +47,13 @@ def save_history(sender_id, history_entry):
                 history_entry['first_name'] = "Unknown"
                 history_entry['profile_photo_url'] = "https://via.placeholder.com/150"
             else:
-                history_entry['display_name'] = display_name
+                history_entry['display_name'] = username if username else display_name
                 history_entry['first_name'] = display_name.split()[0] if display_name else "Unknown"
                 history_entry['profile_photo_url'] = photo_url
 
         if sender_id not in history_data:
             history_data[sender_id] = []
         
-        # مدیریت حداکثر 30 گیرنده اخیر
         existing_entry_index = next((i for i, entry in enumerate(history_data[sender_id]) if entry['receiver_id'] == history_entry['receiver_id']), None)
         if existing_entry_index is not None:
             history_data[sender_id][existing_entry_index] = history_entry
@@ -162,11 +161,11 @@ def fetch_user_info(receiver_id):
 
         USER_INFO_CACHE[receiver_id] = {
             "username": username,
-            "display_name": display_name,
+            "display_name": username if username else display_name,
             "photo_url": photo_url
         }
         logger.info("Cached user info for %s: %s", receiver_id, USER_INFO_CACHE[receiver_id])
-        return username, receiver_id, display_name, photo_url
+        return username, receiver_id, username if username else display_name, photo_url
     except Exception as e:
         logger.error("Error getting user info for %s: %s", receiver_id, str(e))
         return None, receiver_id, str(receiver_id), "https://via.placeholder.com/150"
@@ -198,19 +197,11 @@ def format_diff_block_code(whisper_data):
     
     if last_seen_time:
         tehran_time = last_seen_time + TEHRAN_OFFSET
-        seen_text = f"خونده {time.strftime('%H:%M', time.localtime(tehran_time))}"
+        seen_text = f"گیرنده [{view_count}] خونده | {time.strftime('%H:%M', time.localtime(tehran_time))}"
     else:
-        seen_text = "نخونده"
+        seen_text = "هنوز نخونده"
     
-    block_lines = [f"- {display_name} {view_count} │ {seen_text}"]
-    block_lines.append("- ───────")
-    
-    if curious_users:
-        block_lines.append("- لیست فضول‌ها 🔻")
-        for user in curious_users:
-            block_lines.append(f"  {user['name']}")
-    else:
-        block_lines.append("- تاریخچه فضول‌ها 🌚")
+    block_lines = [f"- {seen_text}"]
     
     return "\n".join(block_lines)
 
@@ -250,7 +241,7 @@ def process_update(update):
                 resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
                 if resolved_id and user_info:
                     receiver_id = resolved_id
-                    display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                    display_name = user_info.get('username', f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}").strip() if user_info.get('username') else f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
                     first_name = user_info.get('first_name', 'Unknown')
                     username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
                     _, photo_url = get_user_profile_photo(int(receiver_id))
@@ -262,8 +253,9 @@ def process_update(update):
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
                 first_name = display_name.split()[0] if display_name else "Unknown"
 
-            link = f"https://t.me/{username}" if username else f"tg://user?id={receiver_id}"
-            message_text = f"[{escape_markdown(display_name)}]({link})"
+            display_name = f"@{username}" if username else display_name
+            link = f"tg://user?id={receiver_id}"  # لینک غیرفعال شده
+            message_text = f"گیرنده ({display_name})"
             code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
             public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -275,7 +267,8 @@ def process_update(update):
                         {"text": "پاسخ", "switch_inline_query_current_chat": f"{sender_id}"}
                     ],
                     [
-                        {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"}
+                        {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
+                        {"text": f"فضول‌ها [{len(whispers.get(unique_id, {}).get('curious_users', []))}]", "callback_data": f"curious_{unique_id}"}
                     ]
                 ]
             }
@@ -328,7 +321,7 @@ def process_update(update):
                 resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
                 if resolved_id and user_info:
                     receiver_id = resolved_id
-                    display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                    display_name = user_info.get('username', f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}").strip() if user_info.get('username') else f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
                     username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
                     _, photo_url = get_user_profile_photo(int(receiver_id))
                 else:
@@ -338,20 +331,21 @@ def process_update(update):
             else:
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
 
+            display_name = f"@{username}" if username else display_name
             results = [
                 {
                     "type": "article",
                     "id": f"target_{receiver_id}",
-                    "title": "حالا متن نجوا رو تایپ کن تا گزینه ارسال رو نشونت بدم",
+                    "title": "حالا متن نجوا رو بنویس",
                     "description": "پیام خودت رو وارد کن...",
                     "thumb_url": photo_url,
                     "input_message_content": {
-                        "message_text": f"ارسال نجوا به {display_name}\nلطفاً پیام خود را وارد کنید.",
+                        "message_text": f"ارسال نجوا به گیرنده ({display_name})\nلطفاً پیام خود را وارد کنید.",
                         "parse_mode": "MarkdownV2"
                     },
                     "reply_markup": {
                         "inline_keyboard": [[
-                            {"text": f"ارسال به {display_name}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
+                            {"text": f"ارسال به گیرنده ({display_name})", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
                         ]]
                     }
                 }
@@ -368,7 +362,7 @@ def process_update(update):
                             resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@'))
                             if resolved_id and user_info:
                                 resolved_receiver_id = resolved_id
-                                item["display_name"] = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                                item["display_name"] = user_info.get('username', f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}").strip() if user_info.get('username') else f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
                                 item["first_name"] = user_info.get('first_name', 'Unknown')
                                 _, updated_photo = get_user_profile_photo(int(resolved_id))
                                 if updated_photo != "https://via.placeholder.com/150":
@@ -387,19 +381,20 @@ def process_update(update):
                         username_for_link = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
                         if not username_for_link and item["receiver_id"].isdigit():
                             username_for_link, _, _, _ = fetch_user_info(item["receiver_id"])
+                        display_name = f"@{username_for_link}" if username_for_link else item["display_name"]
                         results.append({
                             "type": "article",
                             "id": f"hist_{item['receiver_id']}",
-                            "title": f"ارسال نجوا به {item['display_name']}",
+                            "title": f"ارسال نجوا به گیرنده ({display_name})",
                             "description": f"آخرین نجوا: {get_irst_time(item['time'] + TEHRAN_OFFSET)}",
                             "thumb_url": item["profile_photo_url"],
                             "input_message_content": {
-                                "message_text": f"ارسال نجوا به {item['display_name']}\nلطفاً پیام خود را وارد کنید.",
+                                "message_text": f"ارسال نجوا به گیرنده ({display_name})\nلطفاً پیام خود را وارد کنید.",
                                 "parse_mode": "MarkdownV2"
                             },
                             "reply_markup": {
                                 "inline_keyboard": [[
-                                    {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
+                                    {"text": f"ارسال به گیرنده ({display_name})", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
                                 ]]
                             }
                         })
@@ -422,9 +417,9 @@ def process_update(update):
                         username = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
                         if not username and receiver_id.isdigit():
                             username, _, _, _ = fetch_user_info(receiver_id)
+                        display_name = f"@{username}" if username else display_name
 
-                        link = f"https://t.me/{username}" if username else f"tg://user?id={receiver_id}"
-                        message_text = f"[{escape_markdown(display_name)}]({link})"
+                        message_text = f"گیرنده ({display_name})"
                         code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
                         public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -436,7 +431,8 @@ def process_update(update):
                                     {"text": "پاسخ", "switch_inline_query_current_chat": f"{sender_id}"}
                                 ],
                                 [
-                                    {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"}
+                                    {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
+                                    {"text": f"فضول‌ها [{len(whispers.get(unique_id, {}).get('curious_users', []))}]", "callback_data": f"curious_{unique_id}"}
                                 ]
                             ]
                         }
@@ -472,7 +468,7 @@ def process_update(update):
                         results.append({
                             "type": "article",
                             "id": unique_id,
-                            "title": f"ارسال نجوا به {display_name}",
+                            "title": f"ارسال نجوا به گیرنده ({display_name})",
                             "description": f"پیام: {secret_message[:20]}...",
                             "thumb_url": photo,
                             "input_message_content": {
@@ -496,13 +492,13 @@ def process_update(update):
                 })
             answer_inline_query(inline_query["id"], results)
 
-        # Case 4: Nothing provided, show guide and history
+        # Case 4: Nothing provided, show guide and history immediately
         else:
             results = [
                 {
                     "type": "article",
                     "id": "guide",
-                    "title": "یوزرنیم یا آیدی عددی گیرنده رو تایپ کن، یا از تاریخچه انتخاب کن",
+                    "title": "( آیدی رو تایپ کن یا از تاریخچه انتخاب کن )",
                     "input_message_content": {
                         "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت"
                     },
@@ -510,7 +506,7 @@ def process_update(update):
                 }
             ]
 
-            # نمایش تاریخچه گیرنده‌ها
+            # نمایش تاریخچه گیرنده‌ها به محض تایپ ربات
             try:
                 history = load_history()
                 if sender_id in history and history[sender_id]:
@@ -521,7 +517,7 @@ def process_update(update):
                             resolved_id, user_info = resolve_username_to_id(item["receiver_id"].lstrip('@'))
                             if resolved_id and user_info:
                                 resolved_receiver_id = resolved_id
-                                item["display_name"] = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                                item["display_name"] = user_info.get('username', f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}").strip() if user_info.get('username') else f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
                                 item["first_name"] = user_info.get('first_name', 'Unknown')
                                 _, updated_photo = get_user_profile_photo(int(resolved_id))
                                 if updated_photo != "https://via.placeholder.com/150":
@@ -540,19 +536,20 @@ def process_update(update):
                         username_for_link = item["receiver_id"].lstrip('@') if item["receiver_id"].startswith('@') else None
                         if not username_for_link and item["receiver_id"].isdigit():
                             username_for_link, _, _, _ = fetch_user_info(item["receiver_id"])
+                        display_name = f"@{username_for_link}" if username_for_link else item["display_name"]
                         results.append({
                             "type": "article",
                             "id": f"hist_{item['receiver_id']}",
-                            "title": f"ارسال نجوا به {item['display_name']}",
+                            "title": f"ارسال نجوا به گیرنده ({display_name})",
                             "description": f"آخرین نجوا: {get_irst_time(item['time'] + TEHRAN_OFFSET)}",
                             "thumb_url": item["profile_photo_url"],
                             "input_message_content": {
-                                "message_text": f"ارسال نجوا به {item['display_name']}\nلطفاً پیام خود را وارد کنید.",
+                                "message_text": f"ارسال نجوا به گیرنده ({display_name})\nلطفاً پیام خود را وارد کنید.",
                                 "parse_mode": "MarkdownV2"
                             },
                             "reply_markup": {
                                 "inline_keyboard": [[
-                                    {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
+                                    {"text": f"ارسال به گیرنده ({display_name})", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
                                 ]]
                             }
                         })
@@ -575,13 +572,13 @@ def process_update(update):
             receiver_id = str(replied_user["id"])
             first_name = replied_user.get("first_name", "Unknown")
             username = replied_user.get("username", "").lstrip('@') if replied_user.get("username") else None
-            display_name = f"{first_name} {replied_user.get('last_name', '')}".strip()
+            display_name = username if username else f"{first_name} {replied_user.get('last_name', '')}".strip()
             _, photo_url = get_user_profile_photo(int(receiver_id))
             logger.info("Detected reply to user %s (%s) in group chat %s with message: %s", display_name, receiver_id, chat_id, secret_message)
 
             if secret_message:
-                link = f"https://t.me/{username}" if username else f"tg://user?id={receiver_id}"
-                message_text = f"[{escape_markdown(display_name)}]({link})"
+                display_name = f"@{username}" if username else display_name
+                message_text = f"گیرنده ({display_name})"
                 code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
                 public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -593,7 +590,8 @@ def process_update(update):
                             {"text": "پاسخ", "switch_inline_query_current_chat": f"{sender_id}"}
                         ],
                         [
-                            {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"}
+                            {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
+                            {"text": f"فضول‌ها [{len(whispers.get(unique_id, {}).get('curious_users', []))}]", "callback_data": f"curious_{unique_id}"}
                         ]
                     ]
                 }
@@ -675,20 +673,19 @@ def process_update(update):
                 resolved_id, user_info = resolve_username_to_id(whisper_data["receiver_id"].lstrip('@'))
                 if resolved_id and user_info:
                     new_receiver_id = resolved_id
-                    first_name = user_info.get('first_name', 'Unknown')
+                    display_name = user_info.get('username', f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}").strip() if user_info.get('username') else f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
                     username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-                    display_name = f"{first_name} {user_info.get('last_name', '')}".strip()
                     _, photo_url = get_user_profile_photo(int(new_receiver_id))
                     whisper_data["receiver_id"] = new_receiver_id
                     whisper_data["receiver_user_id"] = new_receiver_id
                     whisper_data["receiver_username"] = username
-                    whisper_data["display_name"] = display_name
-                    whisper_data["first_name"] = first_name
+                    whisper_data["display_name"] = f"@{username}" if username else display_name
+                    whisper_data["first_name"] = user_info.get('first_name', 'Unknown')
                     save_whispers(whispers)
                     history_entry = {
                         "receiver_id": new_receiver_id,
-                        "display_name": display_name,
-                        "first_name": first_name,
+                        "display_name": whisper_data["display_name"],
+                        "first_name": user_info.get('first_name', 'Unknown'),
                         "profile_photo_url": photo_url,
                         "time": time.time()
                     }
@@ -714,11 +711,8 @@ def process_update(update):
                     whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
                     save_whispers(whispers)
 
-            receiver_display_name = whisper_data["display_name"]
-            receiver_id = whisper_data.get("receiver_id", "0")
-            receiver_username = whisper_data["receiver_username"]
-            link = f"https://t.me/{receiver_username}" if receiver_username else f"tg://user?id={receiver_id}"
-            message_text = f"[{escape_markdown(receiver_display_name)}]({link})"
+            display_name = whisper_data["display_name"]
+            message_text = f"گیرنده ({display_name})"
             code_content = format_diff_block_code(whisper_data)
             new_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -731,7 +725,8 @@ def process_update(update):
                         {"text": "پاسخ", "switch_inline_query_current_chat": reply_text}
                     ],
                     [
-                        {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"}
+                        {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
+                        {"text": f"فضول‌ها [{len(whisper_data.get('curious_users', []))}]", "callback_data": f"curious_{unique_id}"}
                     ]
                 ]
             }
@@ -775,13 +770,9 @@ def process_update(update):
                 save_whispers(whispers)
                 answer_callback_query(callback_id, "نجوا با موفقیت پاک شد! 💣", True)
 
-                # ویرایش پیام برای نمایش وضعیت حذف‌شده
-                receiver_display_name = whisper_data["display_name"]
-                receiver_id = whisper_data.get("receiver_id", "0")
-                receiver_username = whisper_data["receiver_username"]
-                link = f"https://t.me/{receiver_username}" if receiver_username else f"tg://user?id={receiver_id}"
-                message_text = f"[{escape_markdown(receiver_display_name)}]({link})"
-                code_content = f"- {receiver_display_name} │ نجوا توسط فرستنده پاک شده🤌🏼"
+                display_name = whisper_data["display_name"]
+                message_text = f"گیرنده ({display_name})"
+                code_content = f"- {display_name} │ نجوا توسط فرستنده پاک شده🤌🏼"
                 new_text = f"{message_text}\n```diff\n{code_content}\n```"
                 keyboard = {
                     "inline_keyboard": [
@@ -811,11 +802,8 @@ def process_update(update):
                     whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
                     save_whispers(whispers)
 
-                receiver_display_name = whisper_data["display_name"]
-                receiver_id = whisper_data.get("receiver_id", "0")
-                receiver_username = whisper_data["receiver_username"]
-                link = f"https://t.me/{receiver_username}" if receiver_username else f"tg://user?id={receiver_id}"
-                message_text = f"[{escape_markdown(receiver_display_name)}]({link})"
+                display_name = whisper_data["display_name"]
+                message_text = f"گیرنده ({display_name})"
                 code_content = format_diff_block_code(whisper_data)
                 new_text = f"{message_text}\n```diff\n{code_content}\n```"
                 keyboard = {
@@ -825,7 +813,8 @@ def process_update(update):
                             {"text": "پاسخ", "switch_inline_query_current_chat": f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])}
                         ],
                         [
-                            {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"}
+                            {"text": "حذف نجوا 💣", "callback_data": f"delete_{unique_id}"},
+                            {"text": f"فضول‌ها [{len(whisper_data.get('curious_users', []))}]", "callback_data": f"curious_{unique_id}"}
                         ]
                     ]
                 }
@@ -842,4 +831,28 @@ def process_update(update):
                 except Exception as e:
                     logger.error("Error updating message for whisper %s: %s", unique_id, str(e))
 
+                answer_callback_query(callback_id, "خجالت بکش😐👊🏼", True)
+
+        elif data.startswith("curious_"):
+            unique_id = data.split("_")[1]
+            whisper_data = whispers.get(unique_id)
+
+            if not whisper_data:
+                answer_callback_query(callback_id, "⌛ نجوا منقضی شده! 🕒", True)
+                return
+
+            is_allowed = (
+                user_id == whisper_data["sender_id"] or
+                (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
+                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
+            )
+
+            if is_allowed:
+                curious_users = whisper_data.get("curious_users", [])
+                if curious_users:
+                    names = "\n".join([user["name"] for user in curious_users])
+                    answer_callback_query(callback_id, f"فضول‌ها:\n{names}", True)
+                else:
+                    answer_callback_query(callback_id, "هیچ فضولی نیست! 🌚", True)
+            else:
                 answer_callback_query(callback_id, "خجالت بکش😐👊🏼", True)
