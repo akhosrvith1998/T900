@@ -192,6 +192,202 @@ def format_diff_block_code(whisper_data):
     else:
         seen_text = "unopened"
     
+    block_l
+```python
+import json
+import uuid
+import time
+import requests
+import os
+from utils import escape_markdown, get_irst_time, answer_inline_query, answer_callback_query, edit_message_text, format_block_code
+from cache import get_cached_inline_query, set_cached_inline_query
+from logger import logger
+
+WHISPERS_FILE = "whispers.json"
+HISTORY_FILE = "history.json"
+
+USER_INFO_CACHE = {}
+
+# تنظیم آفست زمان تهران (UTC+3:30)
+TEHRAN_OFFSET = 3.5 * 3600  # 3 ساعت و 30 دقیقه به ثانیه
+
+def load_history():
+    try:
+        with open(HISTORY_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.error("Error loading history from file: %s", str(e))
+        return {}
+
+def save_history(sender_id, history_entry):
+    try:
+        history_data = load_history()
+        if not history_entry['receiver_id'].isdigit():
+            resolved_id, user_info = resolve_username_to_id(history_entry['receiver_id'].lstrip('@')) if history_entry['receiver_id'].startswith('@') else (None, None)
+            if resolved_id and user_info:
+                history_entry['receiver_id'] = resolved_id
+                history_entry['display_name'] = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                history_entry['first_name'] = user_info.get('first_name', 'Unknown')
+                _, photo_url = get_user_profile_photo(int(resolved_id))
+                history_entry['profile_photo_url'] = photo_url
+            else:
+                history_entry['display_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته (حذف شده)"
+                history_entry['first_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته"
+                history_entry['profile_photo_url'] = "https://via.placeholder.com/150"
+
+        if sender_id not in history_data:
+            history_data[sender_id] = []
+        # جلوگیری از تکرار گیرنده در تاریخچه
+        if not any(entry['receiver_id'] == history_entry['receiver_id'] for entry in history_data[sender_id]):
+            history_data[sender_id].append(history_entry)
+        else:
+            # آپدیت زمان و اطلاعات گیرنده موجود
+            for entry in history_data[sender_id]:
+                if entry['receiver_id'] == history_entry['receiver_id']:
+                    entry['time'] = history_entry['time']
+                    entry['display_name'] = history_entry['display_name']
+                    entry['first_name'] = history_entry['first_name']
+                    entry['profile_photo_url'] = history_entry['profile_photo_url']
+                    break
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history_data, f, indent=4)
+        logger.info("Successfully saved history for sender %s: %s", sender_id, history_entry)
+    except Exception as e:
+        logger.error("Error saving history to file: %s", str(e))
+
+history = load_history()
+
+def load_whispers():
+    try:
+        with open(WHISPERS_FILE, "r") as f:
+            data = json.load(f)
+            for key, value in data.items():
+                if "curious_users" in value:
+                    value["curious_users"] = [user for user in value["curious_users"]]
+            return data
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.error("Error loading whispers: %s", str(e))
+        return {}
+
+def save_whispers(whispers_data):
+    try:
+        with open(WHISPERS_FILE, "w") as f:
+            json.dump(whispers_data, f, indent=4)
+    except Exception as e:
+        logger.error("Error saving whispers: %s", str(e))
+
+whispers = load_whispers()
+BOT_USERNAME = "@Bgnabot"
+TOKEN = os.getenv("BOT_TOKEN", "7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc")
+URL = f"https://api.telegram.org/bot{TOKEN}/"
+
+def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=None, reply_to_message=None):
+    if receiver_id.startswith('@'):
+        username = receiver_id.lstrip('@').lower()
+        if reply_to_message and 'from' in reply_to_message:
+            return str(reply_to_message['from']['id'])
+        logger.info("Using username directly: @%s", username)
+        return receiver_id
+    elif receiver_id.isdigit():
+        logger.info("Using numeric ID: %s", receiver_id)
+        return receiver_id
+    logger.error("Invalid receiver ID format: %s", receiver_id)
+    return None
+
+def get_user_profile_photo(user_id):
+    try:
+        response = requests.get(f"{URL}getUserProfilePhotos", params={"user_id": user_id, "limit": 1}, timeout=10).json()
+        if not response.get('ok'):
+            logger.error("Failed to get profile photos for user %s: %s (Error code: %s)", 
+                         user_id, response.get('description', 'Unknown error'), response.get('error_code', 'N/A'))
+            return None, "https://via.placeholder.com/150"
+        photos = response['result']['photos']
+        if not photos:
+            logger.info("No profile photos found for user %s", user_id)
+            return None, "https://via.placeholder.com/150"
+        photo = photos[0][-1]
+        file_id = photo['file_id']
+        file_response = requests.get(f"{URL}getFile", params={"file_id": file_id}, timeout=10).json()
+        if not file_response.get('ok'):
+            logger.error("Failed to get file path for file_id %s: %s", file_id, file_response.get('description', 'Unknown error'))
+            return None, "https://via.placeholder.com/150"
+        file_path = file_response['result']['file_path']
+        photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+        logger.info("Successfully retrieved photo URL for user %s: %s", user_id, photo_url)
+        return file_id, photo_url
+    except Exception as e:
+        logger.error("Error getting profile photo for user %s: %s", user_id, str(e))
+        return None, "https://via.placeholder.com/150"
+
+def fetch_user_info(receiver_id):
+    if receiver_id in USER_INFO_CACHE:
+        cached_info = USER_INFO_CACHE[receiver_id]
+        logger.info("Using cached user info for %s: %s", receiver_id, cached_info)
+        return cached_info['username'], receiver_id, cached_info['display_name'], cached_info['photo_url']
+
+    if receiver_id.startswith('@'):
+        resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
+        if resolved_id:
+            receiver_id = resolved_id
+        else:
+            return None, receiver_id.lstrip('@'), receiver_id.lstrip('@'), "https://via.placeholder.com/150"
+
+    try:
+        user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
+        if not user_info.get('ok'):
+            logger.error("Failed to get user info for %s: %s (Error code: %s)", 
+                         receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
+            return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
+        user_info = user_info['result']
+        first_name = user_info.get('first_name', 'Unknown')
+        username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+        display_name = f"{first_name} {user_info.get('last_name', '')}".strip()
+        _, photo_url = get_user_profile_photo(int(receiver_id))
+
+        USER_INFO_CACHE[receiver_id] = {
+            "username": username,
+            "display_name": display_name,
+            "photo_url": photo_url
+        }
+        logger.info("Cached user info for %s: %s", receiver_id, USER_INFO_CACHE[receiver_id])
+        return username, receiver_id, display_name, photo_url
+    except Exception as e:
+        logger.error("Error getting user info for %s: %s", receiver_id, str(e))
+        return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
+
+def resolve_username_to_id(username):
+    try:
+        response = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=10).json()
+        if response.get('ok'):
+            user_info = response['result']
+            return str(user_info['id']), user_info
+        else:
+            logger.error("Failed to resolve username @%s: %s (Error code: %s)", 
+                         username, response.get('description', 'Unknown error'), response.get('error_code', 'N/A'))
+            return None, None
+    except Exception as e:
+        logger.error("Error resolving username @%s: %s", username, str(e))
+        return None, None
+
+def format_diff_block_code(whisper_data):
+    display_name = whisper_data["display_name"]
+    receiver_views = whisper_data.get("receiver_views", [])
+    curious_users = whisper_data.get("curious_users", [])
+    
+    view_count = len(receiver_views)
+    last_seen_time = receiver_views[-1] if receiver_views else None
+    
+    # تنظیم زمان به وقت تهران
+    if last_seen_time:
+        tehran_time = last_seen_time + TEHRAN_OFFSET
+        seen_text = f"opened {time.strftime('%H:%M', time.localtime(tehran_time))}"
+    else:
+        seen_text = "unopened"
+    
     block_lines = [f"- {display_name} {view_count} │ {seen_text}"]
     block_lines.append("- ───────")
     
@@ -252,7 +448,7 @@ def process_update(update):
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
                 first_name = display_name.split()[0] if display_name else "Unknown"
 
-            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})"  # استفاده از فرمت یکسان برای هر دو حالت
+            message_text = f"[{escape_markdown(username if username else display_name)}](tg://user?id={receiver_id})"
             code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
             public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -288,7 +484,7 @@ def process_update(update):
                 "display_name": display_name,
                 "first_name": first_name,
                 "profile_photo_url": photo_url,
-                "time": time.time()  # زمان به وقت UTC ذخیره می‌شود
+                "time": time.time()
             }
             try:
                 save_history(sender_id, history_entry)
@@ -370,114 +566,114 @@ def process_update(update):
                                         {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
                                     ]
                                 ]
-            }
+                            }
 
-            whispers[unique_id] = {
-                "sender_id": sender_id,
-                "sender_username": sender_username.lstrip('@') if sender_username else None,
-                "receiver_id": receiver_id,
-                "receiver_username": username,
-                "receiver_user_id": receiver_id if receiver_id.isdigit() else None,
-                "first_name": first_name,
-                "display_name": display_name,
-                "secret_message": secret_message,
-                "receiver_views": [],
-                "curious_users": []
-            }
-            save_whispers(whispers)
+                            whispers[unique_id] = {
+                                "sender_id": sender_id,
+                                "sender_username": sender_username.lstrip('@') if sender_username else None,
+                                "receiver_id": receiver_id,
+                                "receiver_username": username,
+                                "receiver_user_id": receiver_id if receiver_id.isdigit() else None,
+                                "first_name": first_name,
+                                "display_name": display_name,
+                                "secret_message": secret_message,
+                                "receiver_views": [],
+                                "curious_users": []
+                            }
+                            save_whispers(whispers)
 
-            history_entry = {
-                "receiver_id": receiver_id,
-                "display_name": display_name,
-                "first_name": first_name,
-                "profile_photo_url": photo,
-                "time": time.time()  # زمان به وقت UTC ذخیره می‌شود
-            }
-            try:
-                save_history(sender_id, history_entry)
-                history = load_history()
-                logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
+                            history_entry = {
+                                "receiver_id": receiver_id,
+                                "display_name": display_name,
+                                "first_name": first_name,
+                                "profile_photo_url": photo,
+                                "time": time.time()
+                            }
+                            try:
+                                save_history(sender_id, history_entry)
+                                history = load_history()
+                                logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
+                            except Exception as e:
+                                logger.error("Error saving history: %s", str(e))
+
+                            results.append({
+                                "type": "article",
+                                "id": unique_id,
+                                "title": f"Secret to💭 {display_name}",
+                                "description": f"Message: {secret_message[:20]}...",
+                                "thumb_url": photo,
+                                "input_message_content": {
+                                    "message_text": public_text,
+                                    "parse_mode": "MarkdownV2"
+                                },
+                                "reply_markup": markup
+                            })
+                        else:
+                            # نمایش تاریخچه گیرنده‌ها
+                            results.append({
+                                "type": "article",
+                                "id": f"hist_{item['receiver_id']}",
+                                "title": f"ارسال نجوا به {item['display_name']}",
+                                "description": f"آخرین نجوا: {get_irst_time(item['time'] + TEHRAN_OFFSET)}",
+                                "thumb_url": item["profile_photo_url"],
+                                "input_message_content": {
+                                    "message_text": f"ارسال نجوا به {item['display_name']}\nلطفاً پیام خود را وارد کنید.",
+                                    "parse_mode": "MarkdownV2"
+                                },
+                                "reply_markup": {
+                                    "inline_keyboard": [[
+                                        {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
+                                    ]]
+                                }
+                            })
+                # Add target as priority if provided
+                if target and (target.startswith('@') or target.isdigit()) and not secret_message:
+                    receiver_id = resolve_user_id(target)
+                    if receiver_id:
+                        if receiver_id.startswith('@'):
+                            resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
+                            if resolved_id and user_info:
+                                receiver_id = resolved_id
+                                display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                                username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+                                _, photo_url = get_user_profile_photo(int(receiver_id))
+                            else:
+                                display_name = receiver_id.lstrip('@')
+                                username = receiver_id.lstrip('@')
+                                photo_url = "https://via.placeholder.com/150"
+                        else:
+                            username, _, display_name, photo_url = fetch_user_info(receiver_id)
+                        results.insert(0, {
+                            "type": "article",
+                            "id": f"target_{receiver_id}",
+                            "title": f"ارسال نجوا به {display_name}",
+                            "description": "لطفاً پیام خود را وارد کنید...",
+                            "thumb_url": photo_url,
+                            "input_message_content": {
+                                "message_text": f"ارسال نجوا به {display_name}\nلطفاً پیام خود را وارد کنید.",
+                                "parse_mode": "MarkdownV2"
+                            },
+                            "reply_markup": {
+                                "inline_keyboard": [[
+                                    {"text": f"ارسال به {display_name}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
+                                ]]
+                            }
+                        })
             except Exception as e:
-                logger.error("Error saving history: %s", str(e))
+                logger.error("Error loading or processing history: %s", str(e))
 
-            results.append({
-                "type": "article",
-                "id": unique_id,
-                "title": f"Secret to💭 {display_name}",
-                "description": f"Message: {secret_message[:20]}...",
-                "thumb_url": photo,
-                "input_message_content": {
-                    "message_text": public_text,
-                    "parse_mode": "MarkdownV2"
-                },
-                "reply_markup": markup
-            })
-        else:
-            # نمایش تاریخچه گیرنده‌ها
-            results.append({
-                "type": "article",
-                "id": f"hist_{item['receiver_id']}",
-                "title": f"ارسال نجوا به {item['display_name']}",
-                "description": f"آخرین نجوا: {get_irst_time(item['time'] + TEHRAN_OFFSET)}",  # تنظیم زمان به وقت تهران
-                "thumb_url": item["profile_photo_url"],
-                "input_message_content": {
-                    "message_text": f"ارسال نجوا به {item['display_name']}\nلطفاً پیام خود را وارد کنید.",
-                    "parse_mode": "MarkdownV2"
-                },
-                "reply_markup": {
-                    "inline_keyboard": [[
-                        {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
-                    ]]
-                }
-            })
-        # Add target as priority if provided
-        if target and (target.startswith('@') or target.isdigit()) and not secret_message:
-            receiver_id = resolve_user_id(target)
-            if receiver_id:
-                if receiver_id.startswith('@'):
-                    resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
-                    if resolved_id and user_info:
-                        receiver_id = resolved_id
-                        display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
-                        username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-                        _, photo_url = get_user_profile_photo(int(receiver_id))
-                    else:
-                        display_name = receiver_id.lstrip('@')
-                        username = receiver_id.lstrip('@')
-                        photo_url = "https://via.placeholder.com/150"
-                else:
-                    username, _, display_name, photo_url = fetch_user_info(receiver_id)
-                results.insert(0, {
+            if not results and not query:
+                results.append({
                     "type": "article",
-                    "id": f"target_{receiver_id}",
-                    "title": f"ارسال نجوا به {display_name}",
-                    "description": "لطفاً پیام خود را وارد کنید...",
-                    "thumb_url": photo_url,
+                    "id": "guide",
+                    "title": "راهنما",
                     "input_message_content": {
-                        "message_text": f"ارسال نجوا به {display_name}\nلطفاً پیام خود را وارد کنید.",
-                        "parse_mode": "MarkdownV2"
+                        "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت"
                     },
-                    "reply_markup": {
-                        "inline_keyboard": [[
-                            {"text": f"ارسال به {display_name}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
-                        ]]
-                    }
+                    "thumb_url": "https://via.placeholder.com/150"
                 })
-    except Exception as e:
-        logger.error("Error loading history: %s", str(e))
 
-    if not results and not query:
-        results.append({
-            "type": "article",
-            "id": "guide",
-            "title": "راهنما",
-            "input_message_content": {
-                "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت"
-            },
-            "thumb_url": "https://via.placeholder.com/150"
-        })
-
-    answer_inline_query(inline_query["id"], results)
+            answer_inline_query(inline_query["id"], results)
 
     elif "message" in update and "reply_to_message" in update["message"] and update["message"]["chat"]["type"] in ["group", "supergroup"]:
         message = update["message"]
@@ -534,7 +730,7 @@ def process_update(update):
                     "display_name": display_name,
                     "first_name": first_name,
                     "profile_photo_url": photo_url,
-                    "time": time.time()  # زمان به وقت UTC ذخیره می‌شود
+                    "time": time.time()
                 }
                 try:
                     save_history(sender_id, history_entry)
