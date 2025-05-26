@@ -61,7 +61,7 @@ def get_user_profile_photo(user_id):
 
         photos = response['result']['photos']
         if not photos:
-            logger.info("No profile photos found for user %s", user_id)
+            logger.info("No profile photos found for user %s (possibly no photo set)", user_id)
             return None, "https://via.placeholder.com/150"
 
         # Get the first photo (most recent)
@@ -225,7 +225,7 @@ def process_update(update):
             
             try:
                 logger.info("Loading history for sender %s: %s", sender_id, history.get(sender_id, []))
-                if sender_id in history:
+                if sender_id in history and history[sender_id]:
                     for item in history[sender_id]:
                         photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
                         # Check if receiver_id is numeric before converting to int
@@ -253,12 +253,12 @@ def process_update(update):
                             "description": f"Last sent: {get_irst_time(item['time'])}",
                             "thumb_url": item["profile_photo_url"],
                             "input_message_content": {
-                                "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id'] if item['receiver_id'].isdigit() else '0'})"  # Fix link format
+                                "message_text": f"[{escape_markdown(item['display_name'])}](tg://user?id={item['receiver_id'] if item['receiver_id'].isdigit() else '0'})"  
                                                f"\nTo send again: @Bgnabot {item['receiver_id']} [message]"
                             }
                         })
                 else:
-                    logger.info("No history found for sender %s", sender_id)
+                    logger.warning("No valid history found for sender %s", sender_id)
             except Exception as e:
                 logger.error("Error loading history: %s", str(e))
 
@@ -484,5 +484,25 @@ def process_update(update):
                     whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
                     save_whispers(whispers)
                     logger.info("Added curious user %s (%s) to whisper %s", user_display_name, user_id, unique_id)
+
+                    # Update the message to reflect the new curious_users
+                    receiver_display_name = whisper_data["display_name"]
+                    receiver_id = whisper_data.get("receiver_id", "0")
+                    message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(receiver_display_name)
+                    code_content = format_block_code(whisper_data)
+                    new_text = f"{message_text}\n```\n{code_content}\n```"
+                    keyboard = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "Show", "callback_data": f"show_{unique_id}"},
+                                {"text": "Reply", "switch_inline_query_current_chat": f"@{whisper_data['sender_username']}" if whisper_data["sender_username"] else str(whisper_data["sender_id"])}
+                            ],
+                            [
+                                {"text": "Secret Room 😈", "callback_data": f"secret_{unique_id}"}
+                            ]
+                        ]
+                    }
+                    if inline_message_id:
+                        edit_message_text(inline_message_id=inline_message_id, text=new_text, reply_markup=keyboard)
 
             answer_callback_query(callback_id, response_text, True)
