@@ -26,7 +26,7 @@ def save_history(sender_id, history_entry):
     try:
         history_data = load_history()
         if not history_entry['receiver_id'].isdigit():
-            resolved_id, user_info = resolve_username_to_id(history_entry['receiver_id'].lstrip('@'))
+            resolved_id, user_info = resolve_username_to_id(history_entry['receiver_id'].lstrip('@')) if history_entry['receiver_id'].startswith('@') else (None, None)
             if resolved_id and user_info:
                 history_entry['receiver_id'] = resolved_id
                 history_entry['display_name'] = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
@@ -34,9 +34,8 @@ def save_history(sender_id, history_entry):
                 _, photo_url = get_user_profile_photo(int(resolved_id))
                 history_entry['profile_photo_url'] = photo_url
             else:
-                history_entry['receiver_id'] = history_entry['receiver_id']
-                history_entry['display_name'] = "ناشناخته (حذف شده)"
-                history_entry['first_name'] = "ناشناخته"
+                history_entry['display_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته (حذف شده)"
+                history_entry['first_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته"
                 history_entry['profile_photo_url'] = "https://via.placeholder.com/150"
 
         if sender_id not in history_data:
@@ -82,11 +81,8 @@ def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=N
         username = receiver_id.lstrip('@').lower()
         if reply_to_message and 'from' in reply_to_message:
             return str(reply_to_message['from']['id'])
-        resolved_id, _ = resolve_username_to_id(username)
-        if resolved_id:
-            return resolved_id
         logger.info("Using username directly: @%s", username)
-        return receiver_id
+        return receiver_id  # Keep username as is, resolve later if needed
     elif receiver_id.isdigit():
         logger.info("Using numeric ID: %s", receiver_id)
         return receiver_id
@@ -129,7 +125,7 @@ def fetch_user_info(receiver_id):
         if resolved_id:
             receiver_id = resolved_id
         else:
-            return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
+            return None, receiver_id.lstrip('@'), receiver_id.lstrip('@'), "https://via.placeholder.com/150"
 
     try:
         user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
@@ -181,7 +177,7 @@ def format_diff_block_code(whisper_data):
     block_lines.append("- ───────")
     
     if curious_users:
-        block_lines.append("- History 🍆")
+        block_lines.append("- History 😒")
         for user in curious_users:
             block_lines.append(f"  {user['name']}")
     else:
@@ -222,22 +218,15 @@ def process_update(update):
         # Case 1: Valid receiver ID/username + secret message
         if receiver_id and secret_message:
             if receiver_id.startswith('@'):
-                resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
-                if resolved_id:
-                    receiver_id = resolved_id
-                    display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
-                    first_name = user_info.get('first_name', 'Unknown')
-                    username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-                    _, photo_url = get_user_profile_photo(int(receiver_id))
-                else:
-                    display_name = "ناشناخته (حذف شده)"
-                    first_name = "ناشناخته"
-                    username = receiver_id.lstrip('@')
+                display_name = receiver_id.lstrip('@')  # Use username directly
+                first_name = receiver_id.lstrip('@')
+                username = receiver_id.lstrip('@')
+                _, photo_url = get_user_profile_photo(int(receiver_id)) if receiver_id.isdigit() else (None, "https://via.placeholder.com/150")
             else:
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
                 first_name = display_name.split()[0] if display_name else "Unknown"
 
-            message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(display_name)
+            message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else escape_markdown(display_name)
             code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
             public_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -259,7 +248,7 @@ def process_update(update):
                 "sender_username": sender_username.lstrip('@') if sender_username else None,
                 "receiver_id": receiver_id,
                 "receiver_username": username,
-                "receiver_user_id": receiver_id if not receiver_id.startswith('@') else None,
+                "receiver_user_id": receiver_id if receiver_id.isdigit() else None,
                 "first_name": first_name,
                 "display_name": display_name,
                 "secret_message": secret_message,
@@ -320,8 +309,8 @@ def process_update(update):
                                 history = load_history()
                                 logger.info("Updated history entry for receiver %s: %s", item["receiver_id"], item)
                             else:
-                                item["display_name"] = "ناشناخته (حذف شده)"
-                                item["first_name"] = "ناشناخته"
+                                item["display_name"] = item["receiver_id"].lstrip('@')
+                                item["first_name"] = item["receiver_id"].lstrip('@')
                                 item["profile_photo_url"] = "https://via.placeholder.com/150"
                                 save_history(sender_id, item)
                                 history = load_history()
@@ -341,11 +330,40 @@ def process_update(update):
                             "description": f"آخرین نجوا: {get_irst_time(item['time'])}",
                             "thumb_url": item["profile_photo_url"],
                             "input_message_content": {
-                                "message_text": f"ارسال نجوا به {item['display_name']}\nلطفاً پیام خود را وارد کنید."
+                                "message_text": f"{item['display_name']}\n```diff\n{format_diff_block_code({'display_name': item['display_name'], 'receiver_views': [], 'curious_users': []})}\n```",
+                                "parse_mode": "MarkdownV2"
                             },
                             "reply_markup": {
                                 "inline_keyboard": [[
-                                    {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} "}
+                                    {"text": f"ارسال به {item['display_name']}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {item['receiver_id']} {secret_message}" if secret_message else f"{BOT_USERNAME} {item['receiver_id']} "}
+                                ]]
+                            }
+                        })
+                # Add target as priority if provided
+                if target and (target.startswith('@') or target.isdigit()) and not secret_message:
+                    receiver_id = resolve_user_id(target)
+                    if receiver_id:
+                        if receiver_id.startswith('@'):
+                            display_name = receiver_id.lstrip('@')
+                            first_name = receiver_id.lstrip('@')
+                            username = receiver_id.lstrip('@')
+                            photo_url = "https://via.placeholder.com/150"
+                        else:
+                            username, _, display_name, photo_url = fetch_user_info(receiver_id)
+                            first_name = display_name.split()[0] if display_name else "Unknown"
+                        results.insert(0, {
+                            "type": "article",
+                            "id": f"target_{receiver_id}",
+                            "title": f"ارسال نجوا به {display_name}",
+                            "description": "لطفاً پیام خود را وارد کنید...",
+                            "thumb_url": photo_url,
+                            "input_message_content": {
+                                "message_text": f"{display_name}\n```diff\n{format_diff_block_code({'display_name': display_name, 'receiver_views': [], 'curious_users': []})}\n```",
+                                "parse_mode": "MarkdownV2"
+                            },
+                            "reply_markup": {
+                                "inline_keyboard": [[
+                                    {"text": f"ارسال به {display_name}", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
                                 ]]
                             }
                         })
@@ -466,9 +484,9 @@ def process_update(update):
             )
 
             photo_url = "https://via.placeholder.com/150"
-            if receiver_id.startswith('@') and is_allowed:
+            if receiver_id.startswith('@'):
                 resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
-                if resolved_id:
+                if resolved_id and user_info:
                     new_receiver_id = resolved_id
                     first_name = user_info.get('first_name', 'Unknown')
                     username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
@@ -513,7 +531,7 @@ def process_update(update):
 
             receiver_display_name = whisper_data["display_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
-            message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(receiver_display_name)
+            message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else escape_markdown(receiver_display_name)
             code_content = format_diff_block_code(whisper_data)
             new_text = f"{message_text}\n```diff\n{code_content}\n```"
 
@@ -581,7 +599,7 @@ def process_update(update):
 
                     receiver_display_name = whisper_data["display_name"]
                     receiver_id = whisper_data.get("receiver_id", "0")
-                    message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(receiver_display_name)
+                    message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if receiver_id.isdigit() else escape_markdown(receiver_display_name)
                     code_content = format_diff_block_code(whisper_data)
                     new_text = f"{message_text}\n```diff\n{code_content}\n```"
                     keyboard = {
