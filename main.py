@@ -37,28 +37,14 @@ TOKEN = os.getenv("BOT_TOKEN", "7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc")
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 
 def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=None, reply_to_message=None):
-    """Resolve username/ID to numeric ID"""
+    """Resolve username/ID to numeric ID or keep as username"""
     if receiver_id.startswith('@'):
         username = receiver_id.lstrip('@').lower()
         if reply_to_message and 'from' in reply_to_message:
             # Extract ID from replied message if available
             return str(reply_to_message['from']['id'])
-        try:
-            # Try to resolve username via getChatMember if in a group
-            if chat_id:
-                resp = requests.get(f"{URL}getChatMember", params={"chat_id": chat_id, "user_id": receiver_id}, timeout=10).json()
-                if resp.get('ok'):
-                    user_id = str(resp['result']['user']['id'])
-                    logger.info("Resolved username @%s to ID %s using getChatMember", username, user_id)
-                    return user_id
-                else:
-                    logger.error("Failed to resolve username @%s with getChatMember: %s (Error code: %s)", 
-                                 username, resp.get('description', 'Unknown error'), resp.get('error_code', 'N/A'))
-            logger.warning("Could not resolve username @%s, falling back to numeric ID if available", username)
-            return None
-        except requests.RequestException as e:
-            logger.error("Network error resolving username @%s: %s", username, str(e))
-            return None
+        logger.info("Using username directly: @%s", username)
+        return receiver_id  # Keep the username as-is without resolving to ID
     elif receiver_id.isdigit():
         logger.info("Using numeric ID: %s", receiver_id)
         return receiver_id
@@ -108,12 +94,33 @@ def process_update(update):
                     }
                 }])
                 return
-            
-            try:
-                user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
-                if not user_info.get('ok'):
-                    logger.error("Failed to get user info for %s: %s (Error code: %s)", 
-                                 receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
+
+            # If receiver_id is a username, use it directly; otherwise, fetch user info for numeric ID
+            if receiver_id.startswith('@'):
+                display_name = receiver_id
+                first_name = receiver_id.lstrip('@')
+                username = receiver_id.lstrip('@')
+            else:
+                try:
+                    user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
+                    if not user_info.get('ok'):
+                        logger.error("Failed to get user info for %s: %s (Error code: %s)", 
+                                     receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
+                        answer_inline_query(inline_query["id"], [{
+                            "type": "article",
+                            "id": "error",
+                            "title": "❌ User not found!",
+                            "input_message_content": {"message_text": "Error: Unable to fetch user info!"}
+                        }])
+                        return
+                    user_info = user_info['result']
+                    first_name = user_info.get('first_name', 'Unknown')
+                    username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+                    display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
+                    _, photo_url = get_user_profile_photo(int(receiver_id))
+                    logger.info("User info for %s: display_name=%s, username=%s", receiver_id, display_name, username)
+                except Exception as e:
+                    logger.error("Error getting user info for %s: %s", receiver_id, str(e))
                     answer_inline_query(inline_query["id"], [{
                         "type": "article",
                         "id": "error",
@@ -121,24 +128,9 @@ def process_update(update):
                         "input_message_content": {"message_text": "Error: Unable to fetch user info!"}
                     }])
                     return
-                user_info = user_info['result']
-                first_name = user_info.get('first_name', 'Unknown')
-                username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-                display_name = f"{user_info.get('first_name', 'Unknown')} {user_info.get('last_name', '')}".strip()
-                _, photo_url = get_user_profile_photo(int(receiver_id))
-                logger.info("User info for %s: display_name=%s, username=%s", receiver_id, display_name, username)
-            except Exception as e:
-                logger.error("Error getting user info for %s: %s", receiver_id, str(e))
-                answer_inline_query(inline_query["id"], [{
-                    "type": "article",
-                    "id": "error",
-                    "title": "❌ User not found!",
-                    "input_message_content": {"message_text": "Error: Unable to fetch user info!"}
-                }])
-                return
 
             if secret_message:
-                message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})"
+                message_text = f"[{escape_markdown(display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(display_name)
                 code_content = f"{display_name} 0 | Not yet\n__________\nNothing"
                 public_text = f"{message_text}\n```\n{code_content}\n```"
 
@@ -146,7 +138,6 @@ def process_update(update):
                 markup = {
                     "inline_keyboard": [
                         [
-                            {"text": f"آیدی: {receiver_id}", "callback_data": f"user_id_{receiver_id}"},
                             {"text": "Show", "callback_data": f"show_{unique_id}"},
                             {"text": "Reply", "switch_inline_query_current_chat": f"{sender_id}"}
                         ],
@@ -161,7 +152,7 @@ def process_update(update):
                     "sender_username": sender_username.lstrip('@') if sender_username else None,
                     "receiver_id": receiver_id,
                     "receiver_username": username,
-                    "receiver_user_id": receiver_id,
+                    "receiver_user_id": receiver_id if not receiver_id.startswith('@') else None,
                     "first_name": first_name,
                     "display_name": display_name,
                     "secret_message": secret_message,
@@ -212,7 +203,7 @@ def process_update(update):
             logger.info("Loading history for sender %s: %s", sender_id, history.get(sender_id, []))
             if sender_id in history:
                 for item in history[sender_id]:
-                    _, photo = get_user_profile_photo(int(item['receiver_id']))
+                    _, photo = get_user_profile_photo(int(item['receiver_id'])) if not item['receiver_id'].startswith('@') else ("", "https://via.placeholder.com/150")
                     results.append({
                         "type": "article",
                         "id": f"hist_{item['receiver_id']}",
@@ -258,7 +249,6 @@ def process_update(update):
                 markup = {
                     "inline_keyboard": [
                         [
-                            {"text": f"Send whisper to @{username or display_name}", "callback_data": f"send_{unique_id}"},
                             {"text": "Show", "callback_data": f"show_{unique_id}"},
                             {"text": "Reply", "switch_inline_query_current_chat": f"{sender_id}"}
                         ],
@@ -311,11 +301,6 @@ def process_update(update):
         message = callback.get("message")
         inline_message_id = callback.get("inline_message_id")
 
-        if data.startswith("user_id_"):
-            user_id = data.split("_")[2]
-            answer_callback_query(callback_id, f"آیدی کاربر: {user_id}", True)
-            return
-
         if data.startswith("show_"):
             unique_id = data.split("_")[1]
             whisper_data = whispers.get(unique_id)
@@ -347,7 +332,7 @@ def process_update(update):
 
             receiver_display_name = whisper_data["display_name"]
             receiver_id = whisper_data.get("receiver_id", "0")
-            message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})"
+            message_text = f"[{escape_markdown(receiver_display_name)}](tg://user?id={receiver_id})" if not receiver_id.startswith('@') else escape_markdown(receiver_display_name)
             code_content = format_block_code(whisper_data)
             new_text = f"{message_text}\n```\n{code_content}\n```"
 
@@ -356,7 +341,6 @@ def process_update(update):
             keyboard = {
                 "inline_keyboard": [
                     [
-                        {"text": f"آیدی: {receiver_id}", "callback_data": f"user_id_{receiver_id}"},
                         {"text": "Show", "callback_data": f"show_{unique_id}"},
                         {"text": "Reply", "switch_inline_query_current_chat": reply_text}
                     ],
