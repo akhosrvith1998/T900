@@ -37,9 +37,20 @@ def save_history(sender_id, history_entry):
                 _, photo_url = get_user_profile_photo(int(resolved_id))
                 history_entry['profile_photo_url'] = photo_url
             else:
-                history_entry['display_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته (حذف شده)"
-                history_entry['first_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته"
+                history_entry['display_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "Unknown User"
+                history_entry['first_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "Unknown"
                 history_entry['profile_photo_url'] = "https://via.placeholder.com/150"
+        else:
+            # اگر ID عددی بود، اطلاعات کاربر رو بگیر
+            username, _, display_name, photo_url = fetch_user_info(history_entry['receiver_id'])
+            if display_name == history_entry['receiver_id']:  # یعنی اطلاعات کاربر پیدا نشده
+                history_entry['display_name'] = display_name
+                history_entry['first_name'] = "Unknown"
+                history_entry['profile_photo_url'] = "https://via.placeholder.com/150"
+            else:
+                history_entry['display_name'] = display_name
+                history_entry['first_name'] = display_name.split()[0] if display_name else "Unknown"
+                history_entry['profile_photo_url'] = photo_url
 
         if sender_id not in history_data:
             history_data[sender_id] = []
@@ -145,7 +156,8 @@ def fetch_user_info(receiver_id):
         if not user_info.get('ok'):
             logger.error("Failed to get user info for %s: %s (Error code: %s)", 
                          receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
-            return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
+            # تغییر: اگر اطلاعات کاربر پیدا نشد، خود ID رو برگردون
+            return None, receiver_id, str(receiver_id), "https://via.placeholder.com/150"
         user_info = user_info['result']
         first_name = user_info.get('first_name', 'Unknown')
         username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
@@ -161,7 +173,8 @@ def fetch_user_info(receiver_id):
         return username, receiver_id, display_name, photo_url
     except Exception as e:
         logger.error("Error getting user info for %s: %s", receiver_id, str(e))
-        return None, None, "ناشناخته (حذف شده)", "https://via.placeholder.com/150"
+        # تغییر: در صورت خطا، خود ID رو برگردون
+        return None, receiver_id, str(receiver_id), "https://via.placeholder.com/150"
 
 def resolve_username_to_id(username):
     try:
@@ -724,7 +737,7 @@ def process_update(update):
                         elif message:
                             edit_message_text(
                                 chat_id=message["chat"]["id"],
-                                message_id=message["message_id"],
+                                message_id=ribbonmessage["message_id"],
                                 text=new_text,
                                 reply_markup=keyboard
                             )
