@@ -3,12 +3,37 @@ import uuid
 import time
 import requests
 import os
-from utils import escape_markdown, get_irst_time, get_user_profile_photo, answer_inline_query, answer_callback_query, edit_message_text, format_block_code
-from database import load_history, save_history, history
+from utils import escape_markdown, get_irst_time, answer_inline_query, answer_callback_query, edit_message_text, format_block_code
 from cache import get_cached_inline_query, set_cached_inline_query
 from logger import logger
 
 WHISPERS_FILE = "whispers.json"
+HISTORY_FILE = "history.json"
+
+# Functions to manage history in a JSON file
+def load_history():
+    try:
+        with open(HISTORY_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.error("Error loading history from file: %s", str(e))
+        return {}
+
+def save_history(sender_id, history_entry):
+    try:
+        history_data = load_history()
+        if sender_id not in history_data:
+            history_data[sender_id] = []
+        history_data[sender_id].append(history_entry)
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history_data, f, indent=4)
+        logger.info("Successfully saved history for sender %s: %s", sender_id, history_entry)
+    except Exception as e:
+        logger.error("Error saving history to file: %s", str(e))
+
+history = load_history()
 
 def load_whispers():
     try:
@@ -55,7 +80,8 @@ def get_user_profile_photo(user_id):
     try:
         response = requests.get(f"{URL}getUserProfilePhotos", params={"user_id": user_id, "limit": 1}, timeout=10).json()
         if not response.get('ok'):
-            logger.error("Failed to get profile photos for user %s: %s", user_id, response.get('description', 'Unknown error'))
+            logger.error("Failed to get profile photos for user %s: %s (Error code: %s)", 
+                         user_id, response.get('description', 'Unknown error'), response.get('error_code', 'N/A'))
             return None, "https://via.placeholder.com/150"
         photos = response['result']['photos']
         if not photos:
@@ -103,7 +129,8 @@ def resolve_username_to_id(username):
             user_info = response['result']
             return str(user_info['id']), user_info
         else:
-            logger.error("Failed to resolve username @%s: %s", username, response.get('description', 'Unknown error'))
+            logger.error("Failed to resolve username @%s: %s (Error code: %s)", 
+                         username, response.get('description', 'Unknown error'), response.get('error_code', 'N/A'))
             return None, None
     except Exception as e:
         logger.error("Error resolving username @%s: %s", username, str(e))
@@ -111,15 +138,16 @@ def resolve_username_to_id(username):
 
 def process_update(update):
     """Process updates received from Telegram"""
-    logger.info("Bot processing update: %s", update)  # Log the full update
+    logger.info("Bot processing update: %s", update)
     global whispers
+    global history
 
     if "inline_query" in update:
         inline_query = update["inline_query"]
         query = inline_query.get("query", "").strip()
         sender_id = str(inline_query['from']['id'])
         sender_username = inline_query['from'].get('username', '')
-        chat_type = inline_query.get("chat_type")
+        chat_type = inline_query.get("chat_type", "unknown")  # Ensure chat_type is always logged
         chat_id = inline_query.get("chat", {}).get("id")
         reply_to_message = None
 
@@ -188,8 +216,7 @@ def process_update(update):
             }
             try:
                 save_history(sender_id, history_entry)
-                logger.info("Saved history entry for sender %s: %s", sender_id, history_entry)
-                load_history()
+                history = load_history()  # Reload history to ensure it's up-to-date
                 logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
             except Exception as e:
                 logger.error("Error saving history: %s", str(e))
@@ -207,19 +234,22 @@ def process_update(update):
                 "reply_markup": markup
             }])
         else:
-            # Show history even if text is typed, unless a valid target is specified
-            results = [{
-                "type": "article",
-                "id": "help",
-                "title": "Help",
-                "input_message_content": {
-                    "message_text": "To send a secret:\n@Bgnabot [ID/username] [message]\nOr reply to a message in a group with @Bgnabot [message]"
-                },
-                "thumb_url": "https://via.placeholder.com/150"
-            }]
+            # Show history or guide message if query is empty
+            results = []
+            if not query:  # If query is empty, show a guide message
+                results.append({
+                    "type": "article",
+                    "id": "guide",
+                    "title": "راهنما",
+                    "input_message_content": {
+                        "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت"
+                    },
+                    "thumb_url": "https://via.placeholder.com/150"
+                })
             
             try:
-                logger.info("Loading history for sender %s from memory: %s", sender_id, history.get(sender_id, []))
+                history = load_history()  # Ensure history is loaded from file
+                logger.info("Loading history for sender %s from file: %s", sender_id, history.get(sender_id, []))
                 if sender_id in history and history[sender_id]:
                     for item in history[sender_id]:
                         photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
@@ -235,7 +265,7 @@ def process_update(update):
                                 if updated_photo != "https://via.placeholder.com/150":
                                     item["profile_photo_url"] = updated_photo
                                     save_history(sender_id, item)
-                                    load_history()
+                                    history = load_history()
                                     logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
                             else:
                                 updated_photo = "https://via.placeholder.com/150"
@@ -244,7 +274,7 @@ def process_update(update):
                             if updated_photo != "https://via.placeholder.com/150":
                                 item["profile_photo_url"] = updated_photo
                                 save_history(sender_id, item)
-                                load_history()
+                                history = load_history()
                                 logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
 
                         # Adjust the link for usernames
@@ -260,7 +290,17 @@ def process_update(update):
                             }
                         })
                 else:
-                    logger.warning("No valid history found for sender %s in memory: %s", sender_id, history.get(sender_id, []))
+                    logger.warning("No valid history found for sender %s in file: %s", sender_id, history.get(sender_id, []))
+                    if query:  # Show help message only if query is not empty
+                        results.append({
+                            "type": "article",
+                            "id": "help",
+                            "title": "Help",
+                            "input_message_content": {
+                                "message_text": "To send a secret:\n@Bgnabot [ID/username] [message]\nOr reply to a message in a group with @Bgnabot [message]"
+                            },
+                            "thumb_url": "https://via.placeholder.com/150"
+                        })
             except Exception as e:
                 logger.error("Error loading history: %s", str(e))
 
@@ -325,8 +365,7 @@ def process_update(update):
                 }
                 try:
                     save_history(sender_id, history_entry)
-                    logger.info("Saved history entry for sender %s: %s", sender_id, history_entry)
-                    load_history()
+                    history = load_history()
                     logger.info("Updated history for sender %s after save: %s", sender_id, history.get(sender_id, []))
                 except Exception as e:
                     logger.error("Error saving history: %s", str(e))
@@ -391,8 +430,7 @@ def process_update(update):
                     }
                     try:
                         save_history(whisper_data["sender_id"], history_entry)
-                        logger.info("Saved history entry for sender %s: %s", whisper_data["sender_id"], history_entry)
-                        load_history()
+                        history = load_history()
                         logger.info("Updated history for sender %s after save: %s", whisper_data["sender_id"], history.get(whisper_data["sender_id"], []))
                     except Exception as e:
                         logger.error("Error saving history: %s", str(e))
