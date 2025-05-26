@@ -37,12 +37,9 @@ def save_history(sender_id, history_entry):
                 _, photo_url = get_user_profile_photo(int(resolved_id))
                 history_entry['profile_photo_url'] = photo_url
             else:
-                # اگر یوزرنیم ریزالو نشد، از ذخیره‌سازی صرف‌نظر کن
-                logger.warning("Username %s could not be resolved, skipping history entry", history_entry['receiver_id'])
-                return
-        else:
-            _, photo_url = get_user_profile_photo(int(history_entry['receiver_id']))
-            history_entry['profile_photo_url'] = photo_url or "https://via.placeholder.com/150"
+                history_entry['display_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته (حذف شده)"
+                history_entry['first_name'] = history_entry['receiver_id'].lstrip('@') if history_entry['receiver_id'].startswith('@') else "ناشناخته"
+                history_entry['profile_photo_url'] = "https://via.placeholder.com/150"
 
         if sender_id not in history_data:
             history_data[sender_id] = []
@@ -168,6 +165,10 @@ def fetch_user_info(receiver_id):
 
 def resolve_username_to_id(username):
     try:
+        # پیشنهاد دیباگ: چک کن که یوزرنیم خالی نباشه
+        if not username or not username.strip():
+            logger.warning("Empty or invalid username provided: %s", username)
+            return None, None
         response = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=10).json()
         if response.get('ok'):
             user_info = response['result']
@@ -338,9 +339,12 @@ def process_update(update):
                                 history = load_history()
                                 logger.info("Updated history entry for receiver %s: %s", item["receiver_id"], item)
                             else:
-                                # اگر یوزرنیم ریزالو نشد، از نمایش صرف‌نظر کن
-                                logger.warning("Could not resolve username %s, skipping history entry", item["receiver_id"])
-                                continue
+                                item["display_name"] = item["receiver_id"].lstrip('@')
+                                item["first_name"] = item["receiver_id"].lstrip('@')
+                                item["profile_photo_url"] = "https://via.placeholder.com/150"
+                                save_history(sender_id, item)
+                                history = load_history()
+                                logger.info("Updated history entry for unresolvable receiver %s: %s", item["receiver_id"], item)
                         else:
                             _, updated_photo = get_user_profile_photo(int(item["receiver_id"]))
                             if updated_photo != "https://via.placeholder.com/150":
@@ -348,6 +352,9 @@ def process_update(update):
                                 save_history(sender_id, item)
                                 history = load_history()
                                 logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
+
+                        # پیشنهاد دیباگ: لاگ اضافه کن تا مطمئن شی داده‌ها درست ذخیره می‌شن
+                        logger.debug("History item after update: %s", item)
 
                         # اگر پیام وجود داره و کاربر روی گیرنده کلیک کرده، نجوا رو فوراً بفرست
                         if secret_message:
