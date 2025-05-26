@@ -228,14 +228,22 @@ def process_update(update):
                 if sender_id in history:
                     for item in history[sender_id]:
                         photo = item.get("profile_photo_url", "https://via.placeholder.com/150")
-                        # Ensure photo is updated for each history item
-                        if not photo.startswith("https://api.telegram.org"):
-                            _, updated_photo = get_user_profile_photo(int(item["receiver_id"]) if item["receiver_id"].isdigit() else int(history[sender_id][0]["receiver_id"]) if history[sender_id] else sender_id)
-                            if updated_photo != "https://via.placeholder.com/150":
-                                item["profile_photo_url"] = updated_photo
-                                save_history(sender_id, item)
-                                load_history()
-                                logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
+                        # Check if receiver_id is numeric before converting to int
+                        receiver_id_numeric = item["receiver_id"] if item["receiver_id"].isdigit() else None
+                        if receiver_id_numeric:
+                            _, updated_photo = get_user_profile_photo(int(receiver_id_numeric))
+                        else:
+                            # Try to resolve username to get photo
+                            resolved_id, _ = resolve_username_to_id(item["receiver_id"].lstrip('@')) if item["receiver_id"].startswith('@') else (None, None)
+                            if resolved_id:
+                                _, updated_photo = get_user_profile_photo(int(resolved_id))
+                            else:
+                                updated_photo = "https://via.placeholder.com/150"
+                        if updated_photo != "https://via.placeholder.com/150":
+                            item["profile_photo_url"] = updated_photo
+                            save_history(sender_id, item)
+                            load_history()
+                            logger.info("Updated photo URL for receiver %s: %s", item["receiver_id"], updated_photo)
                         results.append({
                             "type": "article",
                             "id": f"hist_{item['receiver_id']}",
@@ -453,8 +461,23 @@ def process_update(update):
 
             user = callback["from"]
             user_id = str(user["id"])
-            if user_id == whisper_data["sender_id"]:
-                response_text = f"🔐 Secret room:\n{whisper_data['secret_message']}\nفقط فرستنده می‌تواند این را ببیند!"
+            username = user.get("username", "").lstrip('@').lower() if user.get("username") else None
+            first_name = user.get("first_name", "")
+            last_name = user.get("last_name", "")
+            user_display_name = f"{first_name} {last_name}".strip() if last_name else first_name
+
+            is_allowed = (
+                user_id == whisper_data["sender_id"] or
+                (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
+                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
+            )
+
+            if is_allowed:
+                response_text = "به زودی"
             else:
-                response_text = "⚠️ فقط فرستنده می‌تواند به Secret Room دسترسی داشته باشد!"
+                response_text = "⚠️ فقط فرستنده و گیرنده می‌توانند دسترسی داشته باشند!"
+                if not any(user['id'] == user_id for user in whisper_data["curious_users"]):
+                    whisper_data["curious_users"].append({"id": user_id, "name": user_display_name})
+                    save_whispers(whispers)
+
             answer_callback_query(callback_id, response_text, True)
