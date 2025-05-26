@@ -50,6 +50,37 @@ def resolve_user_id(receiver_id, sender_id=None, sender_username=None, chat_id=N
     logger.error("Invalid receiver ID format: %s", receiver_id)
     return None
 
+def get_user_profile_photo(user_id):
+    """Fetch the user's profile photo URL"""
+    try:
+        # Get the user's profile photos
+        response = requests.get(f"{URL}getUserProfilePhotos", params={"user_id": user_id, "limit": 1}, timeout=10).json()
+        if not response.get('ok'):
+            logger.error("Failed to get profile photos for user %s: %s", user_id, response.get('description', 'Unknown error'))
+            return None, "https://via.placeholder.com/150"
+
+        photos = response['result']['photos']
+        if not photos:
+            logger.info("No profile photos found for user %s", user_id)
+            return None, "https://via.placeholder.com/150"
+
+        # Get the first photo (most recent)
+        photo = photos[0][-1]  # Largest size of the first photo
+        file_id = photo['file_id']
+
+        # Get the file path
+        file_response = requests.get(f"{URL}getFile", params={"file_id": file_id}, timeout=10).json()
+        if not file_response.get('ok'):
+            logger.error("Failed to get file path for file_id %s: %s", file_id, file_response.get('description', 'Unknown error'))
+            return None, "https://via.placeholder.com/150"
+
+        file_path = file_response['result']['file_path']
+        photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+        return file_id, photo_url
+    except Exception as e:
+        logger.error("Error getting profile photo for user %s: %s", user_id, str(e))
+        return None, "https://via.placeholder.com/150"
+
 def fetch_user_info(receiver_id):
     """Fetch user info (ID, username, display name, photo)"""
     if receiver_id.startswith('@'):
@@ -69,6 +100,23 @@ def fetch_user_info(receiver_id):
     except Exception as e:
         logger.error("Error getting user info for %s: %s", receiver_id, str(e))
         return None, None, "Unknown", "https://via.placeholder.com/150"
+
+def resolve_username_to_id(username):
+    """Try to resolve a username to a numeric ID"""
+    try:
+        # Try to get user info by sending a message or using getChatMember in a known chat
+        # Since getChat may not work for private users, we can try to find the user in a group or via other methods
+        # For now, we'll assume we can't resolve it directly and return None if it fails
+        response = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=10).json()
+        if response.get('ok'):
+            user_info = response['result']
+            return str(user_info['id']), user_info
+        else:
+            logger.error("Failed to resolve username @%s: %s", username, response.get('description', 'Unknown error'))
+            return None, None
+    except Exception as e:
+        logger.error("Error resolving username @%s: %s", username, str(e))
+        return None, None
 
 def process_update(update):
     """Process updates received from Telegram"""
@@ -308,48 +356,53 @@ def process_update(update):
             last_name = user.get("last_name", "")
             user_display_name = f"{first_name} {last_name}".strip() if last_name else first_name
 
-            # Update receiver info if it was a username
+            # Check if the user is allowed to see the whisper (before resolving username)
             receiver_id = whisper_data["receiver_id"]
-            if receiver_id.startswith('@') and (user_id == whisper_data["sender_id"] or username == receiver_id.lstrip('@')):
-                try:
-                    resp = requests.get(f"{URL}getChat", params={"chat_id": f"@{receiver_id.lstrip('@')}"}, timeout=10).json()
-                    if resp.get('ok'):
-                        new_receiver_id = str(resp['result']['id'])
-                        user_info = resp['result']
-                        first_name = user_info.get('first_name', 'Unknown')
-                        username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-                        display_name = f"{first_name} {user_info.get('last_name', '')}".strip()
-                        _, photo_url = get_user_profile_photo(int(new_receiver_id))
-
-                        # Update whisper data
-                        whisper_data["receiver_id"] = new_receiver_id
-                        whisper_data["receiver_user_id"] = new_receiver_id
-                        whisper_data["receiver_username"] = username
-                        whisper_data["display_name"] = display_name
-                        whisper_data["first_name"] = first_name
-                        save_whispers(whispers)
-
-                        # Update history
-                        history_entry = {
-                            "receiver_id": new_receiver_id,
-                            "display_name": display_name,
-                            "first_name": first_name,
-                            "profile_photo_url": photo_url,
-                            "time": time.time()
-                        }
-                        save_history(whisper_data["sender_id"], history_entry)
-                        load_history()
-                        logger.info("Updated history with resolved user info for %s", new_receiver_id)
-                    else:
-                        logger.error("Failed to resolve username %s: %s", receiver_id, resp.get('description', 'Unknown error'))
-                except Exception as e:
-                    logger.error("Error resolving username %s: %s", receiver_id, str(e))
-
-            # Check if the user is allowed to see the whisper
             is_allowed = (
                 user_id == whisper_data["sender_id"] or
                 (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
-                (whisper_data["receiver_username"] and username and username == whisper_data["receiver_username"])
+                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
+            )
+
+            # If the user is allowed and the receiver_id is a username, try to resolve it to a numeric ID
+            photo_url = "https://via.placeholder.com/150"
+            if receiver_id.startswith('@') and is_allowed:
+                resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
+                if resolved_id:
+                    new_receiver_id = resolved_id
+                    first_name = user_info.get('first_name', 'Unknown')
+                    username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+                    display_name = f"{first_name} {user_info.get('last_name', '')}".strip()
+                    _, photo_url = get_user_profile_photo(int(new_receiver_id))
+
+                    # Update whisper data
+                    whisper_data["receiver_id"] = new_receiver_id
+                    whisper_data["receiver_user_id"] = new_receiver_id
+                    whisper_data["receiver_username"] = username
+                    whisper_data["display_name"] = display_name
+                    whisper_data["first_name"] = first_name
+                    save_whispers(whispers)
+
+                    # Update history
+                    history_entry = {
+                        "receiver_id": new_receiver_id,
+                        "display_name": display_name,
+                        "first_name": first_name,
+                        "profile_photo_url": photo_url,
+                        "time": time.time()
+                    }
+                    save_history(whisper_data["sender_id"], history_entry)
+                    load_history()
+                    logger.info("Updated history with resolved user info for %s", new_receiver_id)
+                else:
+                    # If resolving fails, we still allow access based on username
+                    logger.warning("Could not resolve username %s to ID, proceeding with username-based access", receiver_id)
+
+            # Re-check is_allowed after resolving (in case username changed)
+            is_allowed = (
+                user_id == whisper_data["sender_id"] or
+                (whisper_data["receiver_user_id"] and user_id == whisper_data["receiver_user_id"]) or
+                (whisper_data["receiver_username"] and username and username.lower() == whisper_data["receiver_username"].lower())
             )
 
             if is_allowed and user_id != whisper_data["sender_id"]:
