@@ -3,6 +3,8 @@ import uuid
 import time
 import requests
 import os
+import re  # برای regex
+
 from utils import escape_markdown, get_irst_time, answer_inline_query, answer_callback_query, edit_message_text, format_block_code
 from cache import get_cached_inline_query, set_cached_inline_query
 from logger import logger
@@ -39,27 +41,25 @@ TOKEN = os.getenv("BOT_TOKEN", "7889701836:AAECLBRjjDadhpgJreOctpo5Jc72ekDKNjc")
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 
 def resolve_user_id(receiver_id, reply_to_message=None):
+    """تشخیص یوزرنیم، آیدی عددی یا ریپلای"""
     try:
-        if receiver_id.startswith('@'):
+        if reply_to_message and 'from' in reply_to_message:
+            logger.info("Extracting user ID from reply: %s", reply_to_message['from']['id'])
+            return str(reply_to_message['from']['id']), None  # برگرداندن آیدی عددی برای ریپلای
+        elif receiver_id.startswith('@'):
             username = receiver_id.lstrip('@').lower()
             if not username:
                 logger.warning("Empty username provided")
-                return None
-            if reply_to_message and 'from' in reply_to_message:
-                logger.info("Extracting user ID from reply: %s", reply_to_message['from']['id'])
-                return str(reply_to_message['from']['id'])
-            resolved_id, _ = resolve_username_to_id(username)
-            if resolved_id:
-                return resolved_id
-            return receiver_id
+                return None, None
+            return None, username  # برگرداندن یوزرنیم بدون تبدیل به آیدی
         elif receiver_id.isdigit():
             logger.info("Using numeric ID: %s", receiver_id)
-            return receiver_id
+            return receiver_id, None  # برگرداندن آیدی عددی
         logger.error("Invalid receiver ID format: %s", receiver_id)
-        return None
+        return None, None
     except Exception as e:
         logger.error("Error resolving user ID: %s", str(e))
-        return None
+        return None, None
 
 def get_user_profile_photo(user_id):
     try:
@@ -86,24 +86,26 @@ def get_user_profile_photo(user_id):
         logger.error("Error getting profile photo for user %s: %s", user_id, str(e))
         return "https://via.placeholder.com/150"
 
-def fetch_user_info(receiver_id):
+def fetch_user_info(receiver_id, receiver_username=None):
+    """دریافت اطلاعات کاربر بر اساس آیدی یا یوزرنیم"""
     try:
-        if receiver_id in USER_INFO_CACHE:
+        if receiver_id and receiver_id in USER_INFO_CACHE:
             cached_info = USER_INFO_CACHE[receiver_id]
             logger.info("Using cached user info for %s: %s", receiver_id, cached_info)
             return cached_info['username'], receiver_id, cached_info['display_name'], cached_info['photo_url']
 
-        resolved_id = receiver_id
-        if receiver_id.startswith('@'):
-            resolved_id, user_info = resolve_username_to_id(receiver_id.lstrip('@'))
+        if receiver_username:
+            resolved_id, user_info = resolve_username_to_id(receiver_username)
             if not resolved_id:
-                return None, receiver_id, receiver_id, "https://via.placeholder.com/150"
+                return receiver_username, None, f"@{receiver_username}", "https://via.placeholder.com/150"
+        else:
+            resolved_id = receiver_id
 
         user_info = requests.get(f"{URL}getChat", params={"chat_id": resolved_id}, timeout=10).json()
         if not user_info.get('ok'):
             logger.error("Failed to get user info for %s: %s (Error code: %s)", 
                          resolved_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
-            return None, resolved_id, str(resolved_id), "https://via.placeholder.com/150"
+            return receiver_username, resolved_id, receiver_username or str(resolved_id), "https://via.placeholder.com/150"
         
         user_info = user_info['result']
         first_name = user_info.get('first_name', 'Unknown')
@@ -120,7 +122,7 @@ def fetch_user_info(receiver_id):
         return username, resolved_id, display_name, photo_url
     except Exception as e:
         logger.error("Error getting user info for %s: %s", receiver_id, str(e))
-        return None, receiver_id, str(receiver_id), "https://via.placeholder.com/150"
+        return receiver_username, receiver_id, receiver_username or str(receiver_id), "https://via.placeholder.com/150"
 
 def resolve_username_to_id(username):
     try:
@@ -153,6 +155,22 @@ def format_diff_block_code(whisper_data):
     
     return f"- {seen_text}"
 
+def extract_receiver_and_message(query):
+    """جدا کردن گیرنده و پیام با regex"""
+    username_match = re.search(r'@[\w\d]+', query)
+    numeric_match = re.search(r'\b\d{8,}\b', query)
+    
+    if username_match:
+        receiver = username_match.group(0)
+        message = query.replace(receiver, '').strip()
+        return receiver, message
+    elif numeric_match:
+        receiver = numeric_match.group(0)
+        message = query.replace(receiver, '').strip()
+        return receiver, message
+    else:
+        return None, query.strip()
+
 def process_update(update):
     logger.info("Bot processing update: %s", update)
     global whispers
@@ -169,29 +187,15 @@ def process_update(update):
 
         logger.info("Processing inline query from %s in chat_type %s: '%s'", sender_id, chat_type, query)
 
-        parts = query.split(maxsplit=1)
-        target = parts[0] if parts else ''
-        secret_message = parts[1] if len(parts) > 1 else ''
+        # جدا کردن گیرنده و پیام
+        target, secret_message = extract_receiver_and_message(query)
+        receiver_id, receiver_username = resolve_user_id(target) if target else (None, None)
 
-        receiver_id = resolve_user_id(target) if target else None
-
-        # Case 1: Valid receiver ID/username + secret message
-        if receiver_id and secret_message:
+        # Case 1: Valid receiver (username or ID) + secret message
+        if (receiver_id or receiver_username) and secret_message:
             try:
-                username, resolved_id, display_name, photo_url = fetch_user_info(receiver_id)
-                if not resolved_id:
-                    logger.error("Could not resolve receiver ID: %s", receiver_id)
-                    answer_inline_query(inline_query["id"], [{
-                        "type": "article",
-                        "id": "error",
-                        "title": "خطا!",
-                        "input_message_content": {
-                            "message_text": "کاربر پیدا نشد. لطفاً یوزرنیم یا آیدی معتبر وارد کنید."
-                        },
-                        "thumb_url": "https://via.placeholder.com/150"
-                    }])
-                    return
-
+                username, resolved_id, display_name, photo_url = fetch_user_info(receiver_id, receiver_username)
+                
                 message_text = f"گیرنده ({display_name})"
                 code_content = format_diff_block_code({"display_name": display_name, "receiver_views": [], "curious_users": []})
                 public_text = f"{message_text}\n```diff\n{code_content}\n```"
@@ -213,9 +217,8 @@ def process_update(update):
                 whispers[unique_id] = {
                     "sender_id": sender_id,
                     "sender_username": sender_username.lstrip('@') if sender_username else None,
-                    "receiver_id": resolved_id,
-                    "receiver_username": username,
-                    "receiver_user_id": resolved_id if resolved_id.isdigit() else None,
+                    "receiver_id": resolved_id if receiver_id else None,
+                    "receiver_username": receiver_username if receiver_username else username,
                     "display_name": display_name,
                     "secret_message": secret_message,
                     "receiver_views": [],
@@ -250,26 +253,14 @@ def process_update(update):
                     "thumb_url": "https://via.placeholder.com/150"
                 }])
 
-        # Case 2: Only receiver ID/username provided, no secret message
-        elif receiver_id:
+        # Case 2: Only receiver provided, no secret message
+        elif receiver_id or receiver_username:
             try:
-                username, resolved_id, display_name, photo_url = fetch_user_info(receiver_id)
-                if not resolved_id and receiver_id.startswith('@'):
-                    logger.error("Could not resolve username: %s", receiver_id)
-                    answer_inline_query(inline_query["id"], [{
-                        "type": "article",
-                        "id": "error",
-                        "title": "خطا!",
-                        "input_message_content": {
-                            "message_text": "کاربر پیدا نشد. لطفاً یوزرنیم یا آیدی معتبر وارد کنید."
-                        },
-                        "thumb_url": "https://via.placeholder.com/150"
-                    }])
-                    return
+                username, resolved_id, display_name, photo_url = fetch_user_info(receiver_id, receiver_username)
 
                 results = [{
                     "type": "article",
-                    "id": f"target_{resolved_id}",
+                    "id": f"target_{resolved_id or receiver_username}",
                     "title": f"ارسال نجوا (به {display_name})",
                     "description": "پیام خودت رو وارد کن...",
                     "thumb_url": photo_url,
@@ -279,11 +270,11 @@ def process_update(update):
                     },
                     "reply_markup": {
                         "inline_keyboard": [[
-                            {"text": f"ارسال نجوا (به {display_name})", "switch_inline_query_current_chat": f"{BOT_USERNAME} {receiver_id} "}
+                            {"text": f"ارسال نجوا (به {display_name})", "switch_inline_query_current_chat": f"{BOT_USERNAME} {target} "}
                         ]]
                     }
                 }]
-                logger.info("Sending receiver selection response for %s: %s", resolved_id, results)
+                logger.info("Sending receiver selection response for %s: %s", resolved_id or receiver_username, results)
                 answer_inline_query(inline_query["id"], results)
             except Exception as e:
                 logger.error("Error processing receiver selection: %s", str(e))
@@ -305,7 +296,7 @@ def process_update(update):
                     "id": "guide",
                     "title": "( آیدی رو تایپ کن یا از ریپلای استفاده کن )",
                     "input_message_content": {
-                        "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت\nیا روی پیام کسی ریپلای کن و @Bgnabot پیامت رو بنویس."
+                        "message_text": "یه چیزی تایپ کن تا بتونم نجوا رو آماده کنم!\nمثال: @Bgnabot @username پیامت\nیا @Bgnabot 1234567890 پیامت\nیا روی پیام کسی ریپلای کن و @Bgnabot پیامت رو بنویس."
                     },
                     "thumb_url": "https://via.placeholder.com/150"
                 }]
@@ -334,8 +325,7 @@ def process_update(update):
             if text.startswith(BOT_USERNAME):
                 text = text[len(BOT_USERNAME):].strip()
                 secret_message = text
-                replied_user = message["reply_to_message"]["from"]
-                receiver_id = str(replied_user["id"])
+                receiver_id, _ = resolve_user_id(None, message["reply_to_message"])
                 username, _, display_name, photo_url = fetch_user_info(receiver_id)
                 logger.info("Detected reply to user %s (%s) in group chat %s with message: %s", display_name, receiver_id, chat_id, secret_message)
 
@@ -363,7 +353,6 @@ def process_update(update):
                         "sender_username": sender_username.lstrip('@') if sender_username else None,
                         "receiver_id": receiver_id,
                         "receiver_username": username,
-                        "receiver_user_id": receiver_id,
                         "display_name": display_name,
                         "secret_message": secret_message,
                         "receiver_views": [],
@@ -390,11 +379,12 @@ def process_update(update):
             callback = update["callback_query"]
             callback_id = callback["id"]
             data = callback["data"]
-            message = callback.get("message")
+            messageoti = callback.get("message")
             inline_message_id = callback.get("inline_message_id")
 
             user = callback["from"]
             user_id = str(user["id"])
+            user_username = user.get("username", "").lstrip('@')
             first_name = user.get("first_name", "")
             last_name = user.get("last_name", "")
             user_display_name = f"{first_name} {last_name}".strip() if last_name else first_name
@@ -408,13 +398,17 @@ def process_update(update):
                     return
 
                 if whisper_data.get("deleted", False):
-                    if user_id == whisper_data["sender_id"] or user_id == whisper_data["receiver_user_id"]:
+                    if user_id == whisper_data["sender_id"] or (whisper_data["receiver_id"] and user_id == whisper_data["receiver_id"]) or (whisper_data["receiver_username"] and user_username == whisper_data["receiver_username"]):
                         answer_callback_query(callback_id, "نجوا توسط فرستنده پاک شده🤌🏼", True)
                     else:
                         answer_callback_query(callback_id, "خجالت بکش😐👊🏼", True)
                     return
 
-                is_allowed = user_id == whisper_data["sender_id"] or user_id == whisper_data["receiver_user_id"]
+                # چک کردن دسترسی بر اساس یوزرنیم یا آیدی
+                is_allowed = user_id == whisper_data["sender_id"] or \
+                            (whisper_data["receiver_id"] and user_id == whisper_data["receiver_id"]) or \
+                            (whisper_data["receiver_username"] and user_username == whisper_data["receiver_username"])
+                
                 if is_allowed and user_id != whisper_data["sender_id"]:
                     whisper_data["receiver_views"].append(time.time())
                     save_whispers(whispers)
@@ -500,7 +494,7 @@ def process_update(update):
                     except Exception as e:
                         logger.error("Error updating message for whisper %s: %s", unique_id, str(e))
 
-                elif user_id == whisper_data["receiver_user_id"]:
+                elif (whisper_data["receiver_id"] and user_id == whisper_data["receiver_id"]) or (whisper_data["receiver_username"] and user_username == whisper_data["receiver_username"]):
                     answer_callback_query(callback_id, "فقط فرستنده میتونه نجواشو پاک کنه🥱", True)
                 else:
                     if not any(user['id'] == user_id for user in whisper_data["curious_users"]):
@@ -546,7 +540,9 @@ def process_update(update):
                     answer_callback_query(callback_id, "⌛ نجوا منقضی شده! 🕒", True)
                     return
 
-                is_allowed = user_id == whisper_data["sender_id"] or user_id == whisper_data["receiver_user_id"]
+                is_allowed = user_id == whisper_data["sender_id"] or \
+                            (whisper_data["receiver_id"] and user_id == whisper_data["receiver_id"]) or \
+                            (whisper_data["receiver_username"] and user_username == whisper_data["receiver_username"])
                 if is_allowed:
                     curious_users = whisper_data.get("curious_users", [])
                     if curious_users:
