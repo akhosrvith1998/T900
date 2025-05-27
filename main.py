@@ -51,7 +51,7 @@ def resolve_user_id(receiver_id, reply_to_message=None):
             if not username:
                 logger.warning("Empty username provided")
                 return None, None
-            return None, username  # برگرداندن یوزرنیم بدون تبدیل به آیدی
+            return None, username  # برگرداندن یوزرنیم
         elif receiver_id.isdigit():
             logger.info("Using numeric ID: %s", receiver_id)
             return receiver_id, None  # برگرداندن آیدی عددی
@@ -86,60 +86,27 @@ def get_user_profile_photo(user_id):
         logger.error("Error getting profile photo for user %s: %s", user_id, str(e))
         return "https://via.placeholder.com/150"
 
-def fetch_user_info(receiver_id, receiver_username=None):
+def fetch_user_info(receiver_id=None, receiver_username=None):
     """دریافت اطلاعات کاربر بر اساس آیدی یا یوزرنیم"""
     try:
-        if receiver_id and receiver_id in USER_INFO_CACHE:
-            cached_info = USER_INFO_CACHE[receiver_id]
-            logger.info("Using cached user info for %s: %s", receiver_id, cached_info)
-            return cached_info['username'], receiver_id, cached_info['display_name'], cached_info['photo_url']
-
-        if receiver_username:
-            resolved_id, user_info = resolve_username_to_id(receiver_username)
-            if not resolved_id:
-                return receiver_username, None, f"@{receiver_username}", "https://via.placeholder.com/150"
-        else:
-            resolved_id = receiver_id
-
-        user_info = requests.get(f"{URL}getChat", params={"chat_id": resolved_id}, timeout=10).json()
-        if not user_info.get('ok'):
-            logger.error("Failed to get user info for %s: %s (Error code: %s)", 
-                         resolved_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
-            return receiver_username, resolved_id, receiver_username or str(resolved_id), "https://via.placeholder.com/150"
-        
-        user_info = user_info['result']
-        first_name = user_info.get('first_name', 'Unknown')
-        username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
-        display_name = f"@{username}" if username else f"{first_name} {user_info.get('last_name', '')}".strip()
-        photo_url = get_user_profile_photo(resolved_id)
-
-        USER_INFO_CACHE[resolved_id] = {
-            "username": username,
-            "display_name": display_name,
-            "photo_url": photo_url
-        }
-        logger.info("Cached user info for %s: %s", resolved_id, USER_INFO_CACHE[resolved_id])
-        return username, resolved_id, display_name, photo_url
+        if receiver_id:
+            user_info = requests.get(f"{URL}getChat", params={"chat_id": receiver_id}, timeout=10).json()
+            if not user_info.get('ok'):
+                logger.error("Failed to get user info for ID %s: %s (Error code: %s)", 
+                             receiver_id, user_info.get('description', 'Unknown error'), user_info.get('error_code', 'N/A'))
+                return None, receiver_id, str(receiver_id), "https://via.placeholder.com/150"
+            user_info = user_info['result']
+            first_name = user_info.get('first_name', 'Unknown')
+            username = user_info.get('username', '').lstrip('@') if user_info.get('username') else None
+            display_name = f"@{username}" if username else f"{first_name} {user_info.get('last_name', '')}".strip()
+            photo_url = get_user_profile_photo(receiver_id)
+            return username, receiver_id, display_name, photo_url
+        elif receiver_username:
+            # برای یوزرنیم، فقط نمایش نام و عکس پیش‌فرض
+            return receiver_username, None, f"@{receiver_username}", "https://via.placeholder.com/150"
     except Exception as e:
-        logger.error("Error getting user info for %s: %s", receiver_id, str(e))
+        logger.error("Error getting user info: %s", str(e))
         return receiver_username, receiver_id, receiver_username or str(receiver_id), "https://via.placeholder.com/150"
-
-def resolve_username_to_id(username):
-    try:
-        if not username or not username.strip():
-            logger.warning("Empty or invalid username provided: %s", username)
-            return None, None
-        response = requests.get(f"{URL}getChat", params={"chat_id": f"@{username}"}, timeout=10).json()
-        if response.get('ok'):
-            user_info = response['result']
-            return str(user_info['id']), user_info
-        else:
-            logger.error("Failed to resolve username @%s: %s (Error code: %s)", 
-                         username, response.get('description', 'Unknown error'), response.get('error_code', 'N/A'))
-            return None, None
-    except Exception as e:
-        logger.error("Error resolving username @%s: %s", username, str(e))
-        return None, None
 
 def format_diff_block_code(whisper_data):
     display_name = whisper_data["display_name"]
@@ -217,8 +184,8 @@ def process_update(update):
                 whispers[unique_id] = {
                     "sender_id": sender_id,
                     "sender_username": sender_username.lstrip('@') if sender_username else None,
-                    "receiver_id": resolved_id if receiver_id else None,
-                    "receiver_username": receiver_username if receiver_username else username,
+                    "receiver_id": receiver_id,
+                    "receiver_username": receiver_username,
                     "display_name": display_name,
                     "secret_message": secret_message,
                     "receiver_views": [],
@@ -379,7 +346,7 @@ def process_update(update):
             callback = update["callback_query"]
             callback_id = callback["id"]
             data = callback["data"]
-            messageoti = callback.get("message")
+            message = callback.get("message")
             inline_message_id = callback.get("inline_message_id")
 
             user = callback["from"]
